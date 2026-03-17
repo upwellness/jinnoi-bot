@@ -28,6 +28,7 @@ export async function POST(req) {
     const userId = event.source.userId
     const text = event.message.text.trim()
 
+    // log ทุก message ที่เข้ามา
     await supabase.from('messages').insert({
       group_id: groupId,
       line_user_id: userId,
@@ -41,7 +42,12 @@ export async function POST(req) {
       .eq('id', groupId)
       .single()
 
-    if (!group) continue
+    if (!group) {
+      console.log('Unknown group:', groupId)
+      continue
+    }
+
+    console.log('Group found:', group.name, group.type)
 
     if (group.type === 'trainer') {
       await supabase.from('drafts').insert({
@@ -57,6 +63,7 @@ export async function POST(req) {
 
     } else if (group.type === 'customer') {
       const reply = await getAnswer(text)
+      console.log('Final reply:', reply)
 
       await lineClient.replyMessage(event.replyToken, {
         type: 'text',
@@ -77,17 +84,23 @@ export async function POST(req) {
 
 async function getAnswer(question) {
   try {
-    // 1. ดึง knowledge ที่ train ไว้
-    const { data: knowledge } = await supabase
+    // ดึง knowledge ทั้งหมดที่ approve แล้ว
+    const { data: knowledge, error: kbError } = await supabase
       .from('knowledge')
       .select('content')
       .order('created_at', { ascending: false })
 
+    console.log('KB error:', kbError)
+    console.log('Knowledge count:', knowledge?.length)
+    console.log('Knowledge data:', JSON.stringify(knowledge))
+
     const knowledgeText = knowledge?.length > 0
       ? knowledge.map(k => k.content).join('\n---\n')
-      : null
+      : 'ยังไม่มีข้อมูล'
 
-    // 2. เรียก Gemini พร้อม Google Search Grounding
+    const prompt = buildPrompt(question, knowledgeText)
+    console.log('Prompt:', prompt)
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -95,12 +108,10 @@ async function getAnswer(question) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{
-            parts: [{
-              text: buildPrompt(question, knowledgeText)
-            }]
+            parts: [{ text: prompt }]
           }],
           generationConfig: {
-            temperature: 0.3,
+            temperature: 0.2,
             maxOutputTokens: 500
           }
         })
@@ -108,32 +119,42 @@ async function getAnswer(question) {
     )
 
     const data = await response.json()
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text
+    console.log('Gemini full response:', JSON.stringify(data))
+
+    const reply =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      data?.candidates?.[0]?.output ||
+      data?.text ||
+      null
+
+    console.log('Parsed reply:', reply)
+
+    if (!reply) {
+      console.log('No reply — finishReason:', data?.candidates?.[0]?.finishReason)
+      console.log('promptFeedback:', JSON.stringify(data?.promptFeedback))
+    }
 
     return reply || 'ขอตรวจสอบและแจ้งกลับนะครับ 🙏'
 
   } catch (err) {
-    console.error('Gemini error:', err)
-    return 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง'
+    console.error('Gemini error:', err.message)
+    return 'ขออภัยครับ ระบบขัดข้องชั่วคราว'
   }
 }
 
 function buildPrompt(question, knowledgeText) {
   return `คุณคือ assistant ของทีม Amway/Nutrilite ประเทศไทย ตอบคำถามเป็นภาษาไทย กระชับ และเป็นมิตร
 
-${knowledgeText ? `## ข้อมูลจากทีมงาน (ใช้อันนี้ก่อนเสมอ ถ้ามีข้อมูลที่ตรง):
+## ข้อมูลจากทีมงาน:
 ${knowledgeText}
 
-` : ''}## แนวทางตอบ:
-1. ถ้าคำถามตรงกับข้อมูลทีมงานด้านบน → ตอบจากนั้นก่อนเลย
-2. ถ้าไม่มีในข้อมูลทีมงาน → ค้นหาจาก Google เกี่ยวกับ Amway ไทย / Nutrilite ไทย แล้วตอบ
-3. ถ้าหาไม่ได้เลย → บอกว่า "ขอตรวจสอบและแจ้งกลับนะครับ 🙏"
-
 ## กฎสำคัญ:
+- ตอบจากข้อมูลทีมงานด้านบนก่อนเสมอ ถ้ามีข้อมูลที่เกี่ยวข้อง
+- ถ้าไม่มีในข้อมูลทีมงาน ให้ใช้ความรู้ทั่วไปเกี่ยวกับ Amway / Nutrilite ประเทศไทย
 - ตอบเฉพาะเรื่อง Amway / Nutrilite / สินค้า / การสั่งซื้อ / โปรโมชั่น
-- ห้ามพูดเรื่องราคาที่ไม่แน่ใจ หรือข้อมูลที่อาจผิด
+- ถ้าไม่มีข้อมูลเพียงพอจริงๆ ให้ตอบว่า "ขอตรวจสอบและแจ้งกลับนะคะ 🙏"
 - ตอบไม่เกิน 4-5 ประโยค
-- ลงท้ายด้วย "ครับ" หรือ "นะครับ"
+- ลงท้ายด้วย "ค่ะ" หรือ "นะคะ"
 
 คำถาม: ${question}`
 }
