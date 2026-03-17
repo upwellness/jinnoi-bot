@@ -1,4 +1,5 @@
-// v3
+// v4
+import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -12,42 +13,32 @@ export async function GET(req) {
     const action = searchParams.get('action')
     console.log('GET action:', action)
 
-    let data = []
-
     if (action === 'drafts') {
-      const res = await supabase.from('drafts').select('*').order('created_at', { ascending: false })
-      console.log('drafts error:', res.error)
-      data = res.data || []
-    } else if (action === 'knowledge') {
-      const res = await supabase.from('knowledge').select('*').order('created_at', { ascending: false })
-      console.log('knowledge error:', res.error)
-      data = res.data || []
-    } else if (action === 'groups') {
-      const res = await supabase.from('groups').select('*').order('created_at', { ascending: false })
-      console.log('groups error:', res.error)
-      data = res.data || []
-    } else if (action === 'pending_groups') {
-      const res = await supabase.from('pending_groups').select('*').order('created_at', { ascending: false })
-      console.log('pending_groups error:', res.error)
-      data = res.data || []
-    } else {
-      return new Response(JSON.stringify({ error: 'unknown action' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      })
+      const { data, error } = await supabase.from('drafts').select('*').order('created_at', { ascending: false })
+      console.log('drafts:', data?.length, 'error:', error?.message)
+      return NextResponse.json(data || [])
+    }
+    if (action === 'knowledge') {
+      const { data, error } = await supabase.from('knowledge').select('*').order('created_at', { ascending: false })
+      console.log('knowledge:', data?.length, 'error:', error?.message)
+      return NextResponse.json(data || [])
+    }
+    if (action === 'groups') {
+      const { data, error } = await supabase.from('groups').select('*').order('created_at', { ascending: false })
+      console.log('groups:', data?.length, 'error:', error?.message)
+      return NextResponse.json(data || [])
+    }
+    if (action === 'pending_groups') {
+      const { data, error } = await supabase.from('pending_groups').select('*').order('created_at', { ascending: false })
+      console.log('pending_groups:', data?.length, 'error:', error?.message)
+      return NextResponse.json(data || [])
     }
 
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
   } catch (err) {
     console.error('GET crash:', err.message)
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
 
@@ -59,32 +50,30 @@ export async function POST(req) {
     if (body.action === 'approve_group') {
       await supabase.from('groups').insert({ id: body.groupId, name: body.name, type: body.type })
       await supabase.from('pending_groups').delete().eq('id', body.pendingId)
-    } else if (body.action === 'reject_group') {
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'reject_group') {
       await supabase.from('pending_groups').delete().eq('id', body.pendingId)
-    } else if (body.action === 'approve_draft') {
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'approve_draft') {
       await supabase.from('drafts').update({ status: 'approved' }).eq('id', body.draftId)
       await supabase.from('knowledge').insert({ content: body.content, source_draft_id: body.draftId })
-    } else if (body.action === 'reject_draft') {
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'reject_draft') {
       await supabase.from('drafts').update({ status: 'rejected' }).eq('id', body.draftId)
-    } else if (body.action === 'delete_knowledge') {
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'delete_knowledge') {
       await supabase.from('knowledge').delete().eq('id', body.id)
-    } else {
-      return new Response(JSON.stringify({ error: 'unknown action' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      })
+      return NextResponse.json({ ok: true })
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
   } catch (err) {
     console.error('POST crash:', err.message)
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
