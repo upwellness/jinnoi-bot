@@ -1,0 +1,15 @@
+{
+  "name": "line-knowledge-bot",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.0",
+    "@line/bot-sdk": "^9.3.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "@google/generative-ai": "^0.3.0"
+  }
+}
