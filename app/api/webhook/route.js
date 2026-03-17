@@ -140,16 +140,3 @@ ${knowledgeText}
 
 คำถาม: ${question}`
 }
-```
-
----
-
-## Logic การทำงาน
-```
-ลูกค้าถาม
-    ↓
-มีใน Knowledge Base ที่ train ไว้ไหม?
-    ↓ ใช่                    ↓ ไม่มี
-ตอบจาก KB         ค้น Google (Amway TH / Nutrilite TH)
-                       ↓ เจอ              ↓ ไม่เจอ
-                   ตอบจาก Google    "ขอตรวจสอบและแจ้งกลับ"
