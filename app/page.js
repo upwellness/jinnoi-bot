@@ -503,20 +503,3 @@ function ApproveModal({ group, onApprove, onClose, s }) {
     </div>
   )
 }
-```
-
----
-
-## Flow ที่ได้
-```
-bot ถูก invite เข้า group ใหม่
-        ↓
-มีคนพิมพ์ message แรก
-        ↓
-webhook บันทึกลง pending_groups
-        ↓
-dashboard แจ้งเตือน 🔔 badge แดง
-        ↓
-admin กด Approve → เลือกชื่อ + ประเภท
-        ↓
-group พร้อมใช้งานทันที ✅
