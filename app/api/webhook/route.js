@@ -10,8 +10,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-// เก็บ conversation history ของแต่ละ group ไว้ใน memory
 const groupHistory = {}
+
+function getPersonality() {
+  return `คุณคือ "จิ้นน้อย" 🌟 assistant สาวนักวิชาการสายมาร์เก็ตติ้ง ประจำทีม UP Labs
+
+บุคลิก:
+- 🎓 นักวิชาการ: อธิบายข้อมูลได้ลึก มีหลักการ น่าเชื่อถือ
+- 📣 Marketing: รู้จักขายไอเดีย ดึงดูดความสนใจ
+- 🌸 น่ารัก สนุก: ใช้ภาษาเข้าใจง่าย ไม่เป็นทางการเกิน
+- ใช้ emoji 2-3 ตัวต่อข้อความ ไม่เยอะเกิน
+- ลงท้ายด้วย "นะคะ" "ค่ะ" "เลยค่ะ"
+- ให้กำลังใจอบอุ่น จริงใจ ไม่แข็งทื่อ
+- ถ้าอธิบายวิชาการ ให้เปรียบเทียบให้เข้าใจง่ายเสมอ`
+}
 
 export async function POST(req) {
   const body = await req.text()
@@ -55,7 +67,7 @@ export async function POST(req) {
       if (isResearch) {
         await lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: '🔍 กำลัง research ข้อมูล รอสักครู่นะครับ...'
+          text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
         })
         researchAndSaveDrafts(text, groupId, userId)
 
@@ -68,21 +80,22 @@ export async function POST(req) {
         })
         await lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: '📝 บันทึกแล้วครับ รอ admin อนุมัติ\n\n💡 พิมพ์ "research: [หัวข้อ]" ให้ AI ค้นหาข้อมูลให้อัตโนมัติ'
+          text: '📝 บันทึกแล้วค่ะ รอ admin อนุมัติก่อนนะคะ 🙏\n\n💡 พิมพ์ "research: [หัวข้อ]" ให้จิ้นน้อยค้นหาข้อมูลให้อัตโนมัติได้เลยค่ะ'
         })
       }
 
     } else if (group.type === 'customer') {
-      // เพิ่ม message เข้า history ของ group นี้
       if (!groupHistory[groupId]) groupHistory[groupId] = []
-      groupHistory[groupId].push({ role: 'user', text, timestamp: Date.now() })
+      groupHistory[groupId].push({
+        role: 'user',
+        text,
+        timestamp: Date.now()
+      })
 
-      // เก็บแค่ 10 message ล่าสุด
       if (groupHistory[groupId].length > 10) {
         groupHistory[groupId] = groupHistory[groupId].slice(-10)
       }
 
-      // ให้ Gemini ตัดสินใจว่าควรตอบไหม และตอบว่าอะไร
       const result = await decideAndAnswer(text, groupId)
 
       if (result.shouldReply) {
@@ -98,8 +111,11 @@ export async function POST(req) {
           direction: 'out'
         })
 
-        // เพิ่ม bot reply เข้า history ด้วย
-        groupHistory[groupId].push({ role: 'bot', text: result.reply, timestamp: Date.now() })
+        groupHistory[groupId].push({
+          role: 'bot',
+          text: result.reply,
+          timestamp: Date.now()
+        })
       }
     }
   }
@@ -108,7 +124,7 @@ export async function POST(req) {
 }
 
 // ==============================
-// SMART REPLY — ตัดสินใจว่าตอบไหม
+// SMART REPLY
 // ==============================
 async function decideAndAnswer(question, groupId) {
   try {
@@ -121,11 +137,10 @@ async function decideAndAnswer(question, groupId) {
       ? knowledge.map(k => k.content).join('\n---\n')
       : 'ยังไม่มีข้อมูล'
 
-    // สร้าง conversation history string
     const history = groupHistory[groupId] || []
     const historyText = history
-      .slice(-6) // เอาแค่ 6 message ล่าสุด
-      .map(m => `${m.role === 'user' ? 'ลูกค้า' : 'Bot'}: ${m.text}`)
+      .slice(-6)
+      .map(m => `${m.role === 'user' ? 'ลูกค้า' : 'จิ้นน้อย'}: ${m.text}`)
       .join('\n')
 
     const response = await fetch(
@@ -136,9 +151,9 @@ async function decideAndAnswer(question, groupId) {
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `คุณคือ assistant ในกลุ่ม LINE ของทีมงาน ทำหน้าที่ตอบคำถามและพูดคุยกับลูกค้า
+              text: `${getPersonality()}
 
-## ข้อมูลหลักจากทีมงาน:
+## ข้อมูลหลักจากทีมงาน (ใช้อันนี้ก่อนเสมอ):
 ${knowledgeText}
 
 ## บทสนทนาล่าสุดในกลุ่ม:
@@ -147,29 +162,25 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 ## message ล่าสุดของลูกค้า:
 "${question}"
 
-## หน้าที่ของคุณ:
-วิเคราะห์ว่า message นี้ควรตอบไหม แล้วตอบในรูปแบบ JSON เท่านั้น
-
+## วิเคราะห์และตัดสินใจ:
 กฎการตัดสินใจ:
-- ถ้าเป็นคำถามชัดเจน → shouldReply: true, ตอบจาก knowledge + Google
-- ถ้าเป็นการทักทาย เช่น "สวัสดี" "หวัดดี" → shouldReply: true, ทักทายกลับสั้นๆ
-- ถ้าเป็นการพูดคุยทั่วไป แชทกัน → shouldReply: false (รอให้คุยกันหลายประโยคก่อน)
-- ถ้าพูดคุยมาหลายประโยคแล้วและบทสนทนาไหลดี → shouldReply: true, ร่วมวงคุยด้วยเป็นธรรมชาติ
-- ถ้า mention bot หรือถามตรงๆ → shouldReply: true เสมอ
+- คำถามชัดเจน → shouldReply: true ตอบจาก knowledge + ค้น Google เพิ่ม
+- ทักทาย "สวัสดี" "หวัดดี" → shouldReply: true ทักทายกลับในสไตล์จิ้นน้อย
+- พูดคุยทั่วไป แชทกัน → shouldReply: false รอให้คุยหลายประโยคก่อน
+- คุยกันมาหลายประโยคแล้ว → shouldReply: true ร่วมวงคุยเป็นธรรมชาติ
+- mention จิ้นน้อย หรือถามตรงๆ → shouldReply: true เสมอ
 
-ตอบ JSON format นี้เท่านั้น ห้ามมีข้อความอื่น:
+ตอบ JSON เท่านั้น ห้ามมีข้อความอื่น:
 {
   "shouldReply": true หรือ false,
   "reason": "เหตุผลสั้นๆ",
-  "reply": "ข้อความตอบกลับ (ถ้า shouldReply เป็น true เท่านั้น)"
+  "reply": "ข้อความในสไตล์จิ้นน้อย (ถ้า shouldReply: true)"
 }`
             }]
           }],
-          tools: [{
-            google_search: {}
-          }],
+          tools: [{ google_search: {} }],
           generationConfig: {
-            temperature: 0.3,
+            temperature: 0.4,
             maxOutputTokens: 800
           }
         })
@@ -177,7 +188,7 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
     )
 
     const data = await response.json()
-    console.log('Gemini decide response:', JSON.stringify(data))
+    console.log('Gemini decide:', JSON.stringify(data))
 
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
     if (!rawText) return { shouldReply: false }
@@ -195,7 +206,7 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 }
 
 // ==============================
-// RESEARCH FUNCTION
+// RESEARCH
 // ==============================
 async function researchAndSaveDrafts(text, groupId, userId) {
   try {
@@ -205,7 +216,7 @@ async function researchAndSaveDrafts(text, groupId, userId) {
       .replace(/^สรุป:/i, '')
       .trim()
 
-    console.log('Researching topic:', topic)
+    console.log('Researching:', topic)
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
@@ -220,7 +231,7 @@ async function researchAndSaveDrafts(text, groupId, userId) {
 สร้างความรู้ที่เป็นประโยชน์ 5-8 ข้อ โดย:
 - แต่ละข้อต้องเป็นประโยคสมบูรณ์ มีบริบทครบ
 - เหมาะสำหรับนำไปตอบคำถามลูกค้า
-- ข้อมูลต้องถูกต้องและเชื่อถือได้
+- ข้อมูลถูกต้อง เชื่อถือได้
 - เขียนเป็นภาษาไทย
 
 ตอบในรูปแบบ JSON array เท่านั้น ห้ามมีข้อความอื่น:
@@ -258,14 +269,14 @@ async function researchAndSaveDrafts(text, groupId, userId) {
 
     await lineClient.pushMessage(groupId, {
       type: 'text',
-      text: `✅ Research เสร็จแล้วครับ!\n\nหัวข้อ: ${topic}\nสร้างความรู้ได้ ${items.length} ข้อ\n\nรอ admin อนุมัติใน dashboard นะครับ 🙏`
+      text: `✅ Research เสร็จแล้วค่ะ!\n\n📚 หัวข้อ: ${topic}\n🔖 สร้างความรู้ได้ ${items.length} ข้อ\n\nรอ admin อนุมัติใน dashboard นะคะ 🙏`
     })
 
   } catch (err) {
     console.error('Research error:', err.message)
     await lineClient.pushMessage(groupId, {
       type: 'text',
-      text: `❌ Research ไม่สำเร็จครับ กรุณาลองใหม่\nError: ${err.message}`
+      text: `❌ Research ไม่สำเร็จค่ะ กรุณาลองใหม่อีกครั้งนะคะ\nError: ${err.message}`
     })
   }
 }
