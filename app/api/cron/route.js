@@ -17,7 +17,6 @@ function getPersonality() {
 }
 
 export async function GET(req) {
-  // ตรวจสอบ secret key กันคนอื่นเรียก
   const { searchParams } = new URL(req.url)
   if (searchParams.get('secret') !== process.env.CRON_SECRET) {
     return new Response('Unauthorized', { status: 401 })
@@ -25,31 +24,30 @@ export async function GET(req) {
 
   const today = new Date()
   const currentTime = `${String(today.getHours()).padStart(2,'0')}:${String(today.getMinutes()).padStart(2,'0')}`
-  const todayDate = today.toISOString().split('T')[0]
 
-  // ดึง group_programs ที่ active ทั้งหมด
   const { data: activePrograms } = await supabase
     .from('group_programs')
-    .select(`
-      *,
-      programs (name),
-      groups (id, name)
-    `)
+    .select(`*, programs(name), groups(id, name)`)
     .eq('is_active', true)
+    .eq('is_paused', false)  // ข้าม group ที่ pause อยู่
 
-  if (!activePrograms || activePrograms.length === 0) {
+  if (!activePrograms?.length) {
     return Response.json({ sent: 0, message: 'No active programs' })
   }
 
   let sentCount = 0
 
   for (const gp of activePrograms) {
-    // คำนวณว่าวันนี้เป็นวันที่เท่าไหร่ของโปรแกรม
-    const start = new Date(gp.start_date)
-    const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24))
-    const currentDay = diffDays + 1 // วันที่ 1 = วันแรก
+    // ถ้ามี override ใช้ override ถ้าไม่มีคำนวณจาก start_date
+    let currentDay
+    if (gp.current_day_override !== null) {
+      currentDay = gp.current_day_override
+    } else {
+      const start = new Date(gp.start_date)
+      const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24))
+      currentDay = diffDays + 1
+    }
 
-    // ดึง message ของวันนี้
     const { data: msg } = await supabase
       .from('program_messages')
       .select('*')
@@ -59,14 +57,12 @@ export async function GET(req) {
 
     if (!msg) continue
 
-    // เช็คเวลาว่าตรงกับที่กำหนดไหม (tolerance 5 นาที)
+    // เช็คเวลา tolerance 5 นาที
     const [msgHour, msgMin] = msg.send_time.split(':').map(Number)
     const [curHour, curMin] = currentTime.split(':').map(Number)
-    const msgMinutes = msgHour * 60 + msgMin
-    const curMinutes = curHour * 60 + curMin
-    if (Math.abs(curMinutes - msgMinutes) > 5) continue
+    const diff = Math.abs((msgHour * 60 + msgMin) - (curHour * 60 + curMin))
+    if (diff > 5) continue
 
-    // ให้ Gemini แต่งข้อความในสไตล์จิ้นน้อย
     const finalMessage = await generateFollowUp(
       msg.content,
       gp.programs.name,
@@ -74,13 +70,11 @@ export async function GET(req) {
       gp.group_id
     )
 
-    // ส่งเข้า LINE group
     await lineClient.pushMessage(gp.group_id, {
       type: 'text',
       text: finalMessage
     })
 
-    // log
     await supabase.from('messages').insert({
       group_id: gp.group_id,
       line_user_id: 'bot_cron',
@@ -88,8 +82,16 @@ export async function GET(req) {
       direction: 'out'
     })
 
+    // ถ้ามี override → clear ออกหลังส่งแล้ว (วันถัดไปกลับคำนวณปกติ)
+    if (gp.current_day_override !== null) {
+      await supabase
+        .from('group_programs')
+        .update({ current_day_override: null })
+        .eq('id', gp.id)
+    }
+
     sentCount++
-    console.log(`Sent day ${currentDay} to group ${gp.group_id}`)
+    console.log(`Sent day ${currentDay} to ${gp.group_id}`)
   }
 
   return Response.json({ sent: sentCount, time: currentTime })
@@ -97,7 +99,6 @@ export async function GET(req) {
 
 async function generateFollowUp(baseContent, programName, day, groupId) {
   try {
-    // ดึง knowledge เพิ่มเติม
     const { data: knowledge } = await supabase
       .from('knowledge')
       .select('content')
@@ -126,25 +127,20 @@ ${baseContent}
 ${knowledgeText}
 
 ## งานของคุณ:
-เขียนข้อความ follow-up สำหรับส่งเข้ากลุ่มวันนี้ในสไตล์จิ้นน้อย
-- เปิดด้วยการบอกว่าวันนี้วันที่เท่าไหร่
-- สรุปสิ่งที่ต้องทำวันนี้ให้ชัดเจน เข้าใจง่าย
-- ให้กำลังใจอย่างอบอุ่น จริงใจ
-- ปิดด้วยการชวนให้แชร์ความคืบหน้าในกลุ่ม
-- ความยาวพอเหมาะ ไม่ยาวเกิน`
+เขียนข้อความ follow-up ส่งเข้ากลุ่มในสไตล์จิ้นน้อย
+- เปิดด้วยบอกวันที่
+- สรุปสิ่งที่ต้องทำวันนี้ชัดเจน เข้าใจง่าย
+- ให้กำลังใจอบอุ่น จริงใจ
+- ปิดด้วยชวนแชร์ความคืบหน้าในกลุ่ม`
             }]
           }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 600
-          }
+          generationConfig: { temperature: 0.7, maxOutputTokens: 600 }
         })
       }
     )
 
     const data = await response.json()
     return data?.candidates?.[0]?.content?.parts?.[0]?.text || baseContent
-
   } catch (err) {
     console.error('GenerateFollowUp error:', err)
     return baseContent
