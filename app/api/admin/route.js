@@ -13,7 +13,6 @@ export async function GET(req) {
     const { data } = await supabase
       .from('drafts')
       .select('*')
-      .eq('status', 'pending')
       .order('created_at', { ascending: false })
     return Response.json(data)
   }
@@ -27,7 +26,18 @@ export async function GET(req) {
   }
 
   if (action === 'groups') {
-    const { data } = await supabase.from('groups').select('*')
+    const { data } = await supabase
+      .from('groups')
+      .select('*')
+      .order('created_at', { ascending: false })
+    return Response.json(data)
+  }
+
+  if (action === 'pending_groups') {
+    const { data } = await supabase
+      .from('pending_groups')
+      .select('*')
+      .order('created_at', { ascending: false })
     return Response.json(data)
   }
 }
@@ -35,22 +45,26 @@ export async function GET(req) {
 export async function POST(req) {
   const body = await req.json()
 
-  // ลงทะเบียน group
-  if (body.action === 'register_group') {
-    const { data } = await supabase.from('groups').upsert({
+  if (body.action === 'approve_group') {
+    // ย้ายจาก pending_groups → groups
+    await supabase.from('groups').insert({
       id: body.groupId,
       name: body.name,
       type: body.type
     })
+    await supabase.from('pending_groups').delete().eq('id', body.pendingId)
     return Response.json({ ok: true })
   }
 
-  // approve draft → เข้า knowledge
+  if (body.action === 'reject_group') {
+    await supabase.from('pending_groups').delete().eq('id', body.pendingId)
+    return Response.json({ ok: true })
+  }
+
   if (body.action === 'approve_draft') {
     await supabase.from('drafts')
       .update({ status: 'approved' })
       .eq('id', body.draftId)
-
     await supabase.from('knowledge').insert({
       content: body.content,
       source_draft_id: body.draftId
@@ -58,17 +72,15 @@ export async function POST(req) {
     return Response.json({ ok: true })
   }
 
-  // ลบ knowledge
-  if (body.action === 'delete_knowledge') {
-    await supabase.from('knowledge').delete().eq('id', body.id)
-    return Response.json({ ok: true })
-  }
-
-  // reject draft
   if (body.action === 'reject_draft') {
     await supabase.from('drafts')
       .update({ status: 'rejected' })
       .eq('id', body.draftId)
+    return Response.json({ ok: true })
+  }
+
+  if (body.action === 'delete_knowledge') {
+    await supabase.from('knowledge').delete().eq('id', body.id)
     return Response.json({ ok: true })
   }
 }
