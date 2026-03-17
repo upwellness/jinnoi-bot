@@ -119,6 +119,8 @@ async function getAnswer(question) {
     )
 
     const data = await response.json()
+    console.log('=== GEMINI RAW ===', JSON.stringify(data, null, 2))
+    console.log('=== KNOWLEDGE SENT ===', knowledgeText)
     console.log('Gemini full response:', JSON.stringify(data))
 
     const reply =
