@@ -58,6 +58,12 @@ export async function POST(req) {
     return Response.json({ ok: true })
   }
 
+  // ลบ knowledge
+  if (body.action === 'delete_knowledge') {
+    await supabase.from('knowledge').delete().eq('id', body.id)
+    return Response.json({ ok: true })
+  }
+
   // reject draft
   if (body.action === 'reject_draft') {
     await supabase.from('drafts')
