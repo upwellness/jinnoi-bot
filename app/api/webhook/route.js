@@ -99,9 +99,6 @@ async function getAnswer(question) {
               text: buildPrompt(question, knowledgeText)
             }]
           }],
-          tools: [{
-            googleSearch: {}   // ← เปิด Google Search Grounding
-          }],
           generationConfig: {
             temperature: 0.3,
             maxOutputTokens: 500
