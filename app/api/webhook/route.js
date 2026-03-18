@@ -1,3 +1,4 @@
+export const maxDuration = 60
 import { Client, validateSignature } from '@line/bot-sdk'
 import { createClient } from '@supabase/supabase-js'
 
@@ -72,6 +73,7 @@ export async function POST(req) {
 
       if (group.type === 'trainer') {
         await handleTrainer(event, text, groupId, userId)
+
       } else if (group.type === 'customer') {
         console.log('=== HANDLING CUSTOMER')
         await handleCustomer(event, text, groupId)
@@ -134,15 +136,15 @@ async function handleTrainer(event, text, groupId, userId) {
 
   const isResearch = /^(research:|ค้นหา:|สรุป:)/i.test(text)
   if (isResearch) {
-  // ตอบ LINE ก่อนเลย ไม่รอ research
-  await lineClient.replyMessage(event.replyToken, {
-    type: 'text',
-    text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
-  })
-  // run background ไม่ await
-  researchAndSaveDrafts(text, groupId, userId)
-  return
-}
+    // reply ก่อน เพราะ replyToken หมดอายุใน 30 วินาที
+    await lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
+    })
+    // await เพื่อให้ Vercel ไม่ kill ก่อนเสร็จ
+    await researchAndSaveDrafts(text, groupId, userId)
+    return
+  }
 
   await supabase.from('drafts').insert({
     content: text,
