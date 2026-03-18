@@ -406,7 +406,7 @@ async function handleCommand(text, groupId) {
       .eq('is_active', true)
       .single()
 
-    if (!gp) return '❌ ไม่พบโปรแกรมที่ active ในกลุ่มนี้ค่ะ'
+    if (!gp) return '❌ ไม่พบโปรแกรมที่ active อยู่ในกลุ่มนี้ค่ะ'
 
     const today = new Date()
     const start = new Date(gp.start_date)
