@@ -134,13 +134,15 @@ async function handleTrainer(event, text, groupId, userId) {
 
   const isResearch = /^(research:|ค้นหา:|สรุป:)/i.test(text)
   if (isResearch) {
-    await lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
-    })
-    researchAndSaveDrafts(text, groupId, userId)
-    return
-  }
+  // ตอบ LINE ก่อนเลย ไม่รอ research
+  await lineClient.replyMessage(event.replyToken, {
+    type: 'text',
+    text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
+  })
+  // run background ไม่ await
+  researchAndSaveDrafts(text, groupId, userId)
+  return
+}
 
   await supabase.from('drafts').insert({
     content: text,
@@ -279,19 +281,67 @@ async function researchAndSaveDrafts(text, groupId, userId) {
     .replace(/^สรุป:/i, '')
     .trim()
 
-  console.log('=== TRIGGER RESEARCH:', topic)
+  console.log('=== RESEARCH START:', topic)
 
-//  const url = `https://${process.env.VERCEL_URL}/api/research`
-  const url = `${process.env.APP_URL}/api/research`
-  console.log('=== CALLING URL:', url)
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `ค้นหาและสรุปข้อมูลเกี่ยวกับ "${topic}" เป็นภาษาไทย
 
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, groupId, userId })
-  })
-  .then(r => console.log('=== RESEARCH TRIGGERED:', r.status))
-  .catch(err => console.error('=== RESEARCH TRIGGER ERROR:', err.message))
+สร้างความรู้ 5 ข้อ แต่ละข้อเป็นประโยคสมบูรณ์ เหมาะตอบคำถามลูกค้า ข้อมูลถูกต้องเชื่อถือได้
+
+ตอบ JSON array เท่านั้น ห้ามมีข้อความอื่น:
+["ข้อ1...","ข้อ2...","ข้อ3...","ข้อ4...","ข้อ5..."]`
+            }]
+          }],
+          tools: [{ google_search: {} }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 2000
+          }
+        })
+      }
+    )
+
+    const data = await response.json()
+    console.log('=== RESEARCH GEMINI:', JSON.stringify(data))
+
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!rawText) throw new Error('No response: ' + JSON.stringify(data?.error || ''))
+
+    const match = rawText.match(/\[[\s\S]*\]/)
+    if (!match) throw new Error('No JSON array in response')
+
+    const items = JSON.parse(match[0])
+    if (!Array.isArray(items) || items.length === 0) throw new Error('Empty array')
+
+    await supabase.from('drafts').insert(
+      items.map(item => ({
+        content: item,
+        group_id: groupId,
+        line_user_id: userId,
+        status: 'pending'
+      }))
+    )
+
+    await lineClient.pushMessage(groupId, {
+      type: 'text',
+      text: `✅ Research เสร็จแล้วค่ะ!\n\n📚 หัวข้อ: ${topic}\n🔖 สร้างความรู้ได้ ${items.length} ข้อ\n\nรอ admin อนุมัติใน dashboard นะคะ 🙏`
+    })
+
+  } catch (err) {
+    console.error('=== RESEARCH ERROR:', err.message)
+    await lineClient.pushMessage(groupId, {
+      type: 'text',
+      text: `❌ Research ไม่สำเร็จค่ะ\nError: ${err.message}\n\nลองใหม่นะคะ 🙏`
+    })
+  }
 }
 
 
