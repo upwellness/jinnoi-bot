@@ -189,6 +189,21 @@ async function handleCustomer(event, text, groupId) {
       timestamp: Date.now()
     })
   }
+  const { data: group } = await supabase
+  .from('groups')
+  .select('type, name')
+  .eq('id', groupId)
+  .single()
+
+  console.log('=== GROUP ===', groupId, JSON.stringify(group))
+
+  if (!group) {
+    console.log('=== NO GROUP — saving to pending ===')
+    await handleUnknownGroup(groupId)
+    continue
+}
+
+console.log('=== GROUP TYPE ===', group.type)
 }
 
 // ==============================
