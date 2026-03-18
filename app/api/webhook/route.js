@@ -281,7 +281,8 @@ async function researchAndSaveDrafts(text, groupId, userId) {
 
   console.log('=== TRIGGER RESEARCH:', topic)
 
-  const url = `https://${process.env.VERCEL_URL}/api/research`
+//  const url = `https://${process.env.VERCEL_URL}/api/research`
+  const url = `${process.env.APP_URL}/api/research`
   console.log('=== CALLING URL:', url)
 
   fetch(url, {
