@@ -259,6 +259,23 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
     console.error('decideAndAnswer error:', err.message)
     return { shouldReply: false }
   }
+
+  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+  console.log('=== RAW TEXT ===', rawText)
+
+  if (!rawText) {
+    console.log('=== NO RAW TEXT ===', JSON.stringify(data))
+    return { shouldReply: false }
+  }
+
+  const match = rawText.match(/\{[\s\S]*\}/)
+  console.log('=== MATCH ===', match?.[0])
+
+  if (!match) return { shouldReply: false }
+
+  const result = JSON.parse(match[0])
+  console.log('=== RESULT ===', JSON.stringify(result))
+  return result
 }
 
 // ==============================
