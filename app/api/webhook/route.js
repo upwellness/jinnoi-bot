@@ -212,7 +212,7 @@ async function decideAndAnswer(question, groupId) {
       .join('\n')
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -221,49 +221,37 @@ async function decideAndAnswer(question, groupId) {
             parts: [{
               text: `${getPersonality()}
 
-## ข้อมูลหลักจากทีมงาน (ใช้อันนี้ก่อนเสมอ):
+## ข้อมูลหลักจากทีมงาน:
 ${knowledgeText}
 
-## บทสนทนาล่าสุดในกลุ่ม:
+## บทสนทนาล่าสุด:
 ${historyText || 'ยังไม่มีบทสนทนา'}
 
-## message ล่าสุดของลูกค้า:
+## message ล่าสุด:
 "${question}"
 
-## วิเคราะห์และตัดสินใจ:
-กฎการตัดสินใจ:
-- คำถามชัดเจน → shouldReply: true ตอบจาก knowledge + ค้น Google เพิ่ม
-- ทักทาย "สวัสดี" "หวัดดี" → shouldReply: true ทักทายกลับในสไตล์จิ้นน้อย
-- พูดคุยทั่วไป แชทกัน → shouldReply: false รอให้คุยหลายประโยคก่อน
-- คุยกันมาหลายประโยคแล้ว → shouldReply: true ร่วมวงคุยเป็นธรรมชาติ
-- mention จิ้นน้อย หรือถามตรงๆ → shouldReply: true เสมอ
-
-ตอบ JSON เท่านั้น ห้ามมีข้อความอื่น:
-{
-  "shouldReply": true หรือ false,
-  "reason": "เหตุผลสั้นๆ",
-  "reply": "ข้อความในสไตล์จิ้นน้อย (ถ้า shouldReply: true)"
-}`
+ตอบ JSON เท่านั้น ให้สั้นที่สุด:
+{"shouldReply":true,"reason":"สั้นๆ","reply":"คำตอบ"}`
             }]
           }],
           tools: [{ google_search: {} }],
           generationConfig: {
             temperature: 0.4,
-            maxOutputTokens: 800
+            maxOutputTokens: 1500
           }
         })
       }
     )
 
     const data = await response.json()
-    console.log('Gemini decide:', JSON.stringify(data))
-
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
     if (!rawText) return { shouldReply: false }
 
-    const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim()
-    const result = JSON.parse(cleaned)
+    // หา JSON ใน response แม้จะมีข้อความอื่นปน
+    const match = rawText.match(/\{[\s\S]*\}/)
+    if (!match) return { shouldReply: false }
 
+    const result = JSON.parse(match[0])
     console.log('Decision:', result.shouldReply, '|', result.reason)
     return result
 
