@@ -281,13 +281,16 @@ async function researchAndSaveDrafts(text, groupId, userId) {
 
   console.log('=== TRIGGER RESEARCH:', topic)
 
-  // เรียก research API แบบ fire-and-forget
-  // ไม่ต้อง await — webhook จะ return ก่อน แล้ว research ทำต่อ background
-  fetch(`https://${process.env.VERCEL_URL}/api/research`, {
+  const url = `https://${process.env.VERCEL_URL}/api/research`
+  console.log('=== CALLING URL:', url)
+
+  fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ topic, groupId, userId })
-  }).catch(err => console.error('Research trigger error:', err.message))
+  })
+  .then(r => console.log('=== RESEARCH TRIGGERED:', r.status))
+  .catch(err => console.error('=== RESEARCH TRIGGER ERROR:', err.message))
 }
 
 
