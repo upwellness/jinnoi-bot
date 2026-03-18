@@ -26,52 +26,64 @@ function getPersonality() {
 }
 
 export async function POST(req) {
-  const body = await req.text()
-  const signature = req.headers.get('x-line-signature')
+  try {
+    const body = await req.text()
+    const signature = req.headers.get('x-line-signature')
 
-  if (!validateSignature(body, process.env.LINE_CHANNEL_SECRET, signature)) {
-    return new Response('Unauthorized', { status: 401 })
-  }
-
-  const { events } = JSON.parse(body)
-
-  for (const event of events) {
-    if (event.type !== 'message' || event.message.type !== 'text') continue
-    if (!event.source.groupId) continue
-
-    const groupId = event.source.groupId
-    const userId = event.source.userId
-    const text = event.message.text.trim()
-
-    // log ทุก message
-    await supabase.from('messages').insert({
-      group_id: groupId,
-      line_user_id: userId,
-      content: text,
-      direction: 'in'
-    })
-
-    // ดึงข้อมูล group
-    const { data: group } = await supabase
-      .from('groups')
-      .select('type, name')
-      .eq('id', groupId)
-      .single()
-
-    // group ยังไม่ได้ลงทะเบียน → บันทึกเป็น pending
-    if (!group) {
-      await handleUnknownGroup(groupId)
-      continue
+    if (!validateSignature(body, process.env.LINE_CHANNEL_SECRET, signature)) {
+      return new Response('Unauthorized', { status: 401 })
     }
 
-    if (group.type === 'trainer') {
-      await handleTrainer(event, text, groupId, userId)
-    } else if (group.type === 'customer') {
-      await handleCustomer(event, text, groupId)
-    }
-  }
+    const { events } = JSON.parse(body)
+    console.log('=== WEBHOOK events:', events?.length)
 
-  return new Response('OK', { status: 200 })
+    for (const event of events) {
+      if (event.type !== 'message' || event.message.type !== 'text') continue
+      if (!event.source.groupId) continue
+
+      const groupId = event.source.groupId
+      const userId = event.source.userId
+      const text = event.message.text.trim()
+
+      console.log('=== MESSAGE:', groupId, text)
+
+      await supabase.from('messages').insert({
+        group_id: groupId,
+        line_user_id: userId,
+        content: text,
+        direction: 'in'
+      })
+
+      const { data: group, error: groupError } = await supabase
+        .from('groups')
+        .select('type, name')
+        .eq('id', groupId)
+        .single()
+
+      console.log('=== GROUP:', JSON.stringify(group), 'error:', groupError?.message)
+
+      if (!group) {
+        console.log('=== UNKNOWN GROUP → pending')
+        await handleUnknownGroup(groupId)
+        continue
+      }
+
+      console.log('=== GROUP TYPE:', group.type)
+
+      if (group.type === 'trainer') {
+        await handleTrainer(event, text, groupId, userId)
+      } else if (group.type === 'customer') {
+        console.log('=== HANDLING CUSTOMER')
+        await handleCustomer(event, text, groupId)
+      }
+    }
+
+    return new Response('OK', { status: 200 })
+
+  } catch (err) {
+    console.error('=== WEBHOOK CRASH:', err.message)
+    return new Response('Error', { status: 500 })
+  }
 }
 
 // ==============================
@@ -79,16 +91,14 @@ export async function POST(req) {
 // ==============================
 async function handleUnknownGroup(groupId) {
   try {
-    // เช็คว่ามีใน pending แล้วยัง
     const { data: existing } = await supabase
       .from('pending_groups')
       .select('id')
       .eq('group_id', groupId)
       .single()
 
-    if (existing) return // มีแล้ว ไม่ต้องทำอะไร
+    if (existing) return
 
-    // ดึงชื่อ group จาก LINE API
     let groupName = 'Unknown Group'
     try {
       const res = await fetch(
@@ -106,27 +116,22 @@ async function handleUnknownGroup(groupId) {
       group_name: groupName
     })
 
-    console.log('New pending group:', groupId, groupName)
+    console.log('=== SAVED PENDING GROUP:', groupId, groupName)
   } catch (err) {
     console.error('handleUnknownGroup error:', err.message)
   }
 }
 
 // ==============================
-// TRAINER GROUP
+// TRAINER
 // ==============================
 async function handleTrainer(event, text, groupId, userId) {
-  // command ขึ้นต้นด้วย /
   if (text.startsWith('/')) {
     const reply = await handleCommand(text, groupId)
-    await lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: reply
-    })
+    await lineClient.replyMessage(event.replyToken, { type: 'text', text: reply })
     return
   }
 
-  // research command
   const isResearch = /^(research:|ค้นหา:|สรุป:)/i.test(text)
   if (isResearch) {
     await lineClient.replyMessage(event.replyToken, {
@@ -137,7 +142,6 @@ async function handleTrainer(event, text, groupId, userId) {
     return
   }
 
-  // message ปกติ → บันทึกเป็น draft
   await supabase.from('drafts').insert({
     content: text,
     group_id: groupId,
@@ -152,23 +156,19 @@ async function handleTrainer(event, text, groupId, userId) {
 }
 
 // ==============================
-// CUSTOMER GROUP
+// CUSTOMER
 // ==============================
 async function handleCustomer(event, text, groupId) {
-  // เพิ่มเข้า history
   if (!groupHistory[groupId]) groupHistory[groupId] = []
-  groupHistory[groupId].push({
-    role: 'user',
-    text,
-    timestamp: Date.now()
-  })
+  groupHistory[groupId].push({ role: 'user', text, timestamp: Date.now() })
 
-  // เก็บแค่ 10 message ล่าสุด
   if (groupHistory[groupId].length > 10) {
     groupHistory[groupId] = groupHistory[groupId].slice(-10)
   }
 
+  console.log('=== CALLING decideAndAnswer')
   const result = await decideAndAnswer(text, groupId)
+  console.log('=== DECISION RESULT:', JSON.stringify(result))
 
   if (result.shouldReply) {
     await lineClient.replyMessage(event.replyToken, {
@@ -183,27 +183,10 @@ async function handleCustomer(event, text, groupId) {
       direction: 'out'
     })
 
-    groupHistory[groupId].push({
-      role: 'bot',
-      text: result.reply,
-      timestamp: Date.now()
-    })
+    groupHistory[groupId].push({ role: 'bot', text: result.reply, timestamp: Date.now() })
+  } else {
+    console.log('=== BOT DECIDED NOT TO REPLY:', result.reason)
   }
-  const { data: group } = await supabase
-  .from('groups')
-  .select('type, name')
-  .eq('id', groupId)
-  .single()
-
-  console.log('=== GROUP ===', groupId, JSON.stringify(group))
-
-  if (!group) {
-    console.log('=== NO GROUP — saving to pending ===')
-    await handleUnknownGroup(groupId)
-    continue
-}
-
-console.log('=== GROUP TYPE ===', group.type)
 }
 
 // ==============================
@@ -216,6 +199,8 @@ async function decideAndAnswer(question, groupId) {
       .select('content')
       .order('created_at', { ascending: false })
 
+    console.log('=== KNOWLEDGE COUNT:', knowledge?.length)
+
     const knowledgeText = knowledge?.length > 0
       ? knowledge.map(k => k.content).join('\n---\n')
       : 'ยังไม่มีข้อมูล'
@@ -227,7 +212,7 @@ async function decideAndAnswer(question, groupId) {
       .join('\n')
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -259,38 +244,29 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
     )
 
     const data = await response.json()
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!rawText) return { shouldReply: false }
+    console.log('=== GEMINI RAW:', JSON.stringify(data))
 
-    // หา JSON ใน response แม้จะมีข้อความอื่นปน
-    const match = rawText.match(/\{[\s\S]*\}/)
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    console.log('=== RAW TEXT:', rawText)
+
+    if (!rawText) {
+      console.log('=== NO RAW TEXT, finishReason:', data?.candidates?.[0]?.finishReason)
+      return { shouldReply: false }
+    }
+
+    const match = rawText.match(/\{[\s\S]*?\}/)
+    console.log('=== MATCH:', match?.[0])
+
     if (!match) return { shouldReply: false }
 
     const result = JSON.parse(match[0])
-    console.log('Decision:', result.shouldReply, '|', result.reason)
+    console.log('=== RESULT:', JSON.stringify(result))
     return result
 
   } catch (err) {
-    console.error('decideAndAnswer error:', err.message)
+    console.error('=== decideAndAnswer error:', err.message)
     return { shouldReply: false }
   }
-
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
-  console.log('=== RAW TEXT ===', rawText)
-
-  if (!rawText) {
-    console.log('=== NO RAW TEXT ===', JSON.stringify(data))
-    return { shouldReply: false }
-  }
-
-  const match = rawText.match(/\{[\s\S]*\}/)
-  console.log('=== MATCH ===', match?.[0])
-
-  if (!match) return { shouldReply: false }
-
-  const result = JSON.parse(match[0])
-  console.log('=== RESULT ===', JSON.stringify(result))
-  return result
 }
 
 // ==============================
@@ -304,7 +280,7 @@ async function researchAndSaveDrafts(text, groupId, userId) {
       .replace(/^สรุป:/i, '')
       .trim()
 
-    console.log('Researching:', topic)
+    console.log('=== RESEARCHING:', topic)
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
@@ -404,7 +380,6 @@ async function handleCommand(text, groupId) {
       .update({ is_paused: true, pause_reason: reason })
       .eq('group_id', groupId)
       .eq('is_active', true)
-
     return `⏸ หยุดโปรแกรมชั่วคราวแล้วค่ะ\nเหตุผล: ${reason}\n\nพิมพ์ /เริ่ม เพื่อเริ่มใหม่นะคะ`
   }
 
@@ -414,7 +389,6 @@ async function handleCommand(text, groupId) {
       .update({ is_paused: false, pause_reason: null })
       .eq('group_id', groupId)
       .eq('is_active', true)
-
     return `▶️ เริ่มโปรแกรมต่อแล้วค่ะ จิ้นน้อยพร้อมแล้ว! 💪`
   }
 
@@ -426,7 +400,7 @@ async function handleCommand(text, groupId) {
       .eq('is_active', true)
       .single()
 
-    if (!gp) return '❌ ไม่พบโปรแกรมที่ active อยู่ในกลุ่มนี้ค่ะ'
+    if (!gp) return '❌ ไม่พบโปรแกรมที่ active ในกลุ่มนี้ค่ะ'
 
     const today = new Date()
     const start = new Date(gp.start_date)
