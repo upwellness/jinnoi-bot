@@ -1,4 +1,3 @@
-export const maxDuration = 60
 import { Client, validateSignature } from '@line/bot-sdk'
 import { createClient } from '@supabase/supabase-js'
 
@@ -13,14 +12,19 @@ const supabase = createClient(
 
 const groupHistory = {}
 
-function getPersonality() {
-  return `คุณคือ "จิ้นน้อย" 🌟 assistant สาวนักวิชาการสายมาร์เก็ตติ้ง ประจำทีม UP Labs
+const GEMINI_MODEL = 'gemini-2.5-flash'
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`
+const IMAGEN_URL = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${process.env.GEMINI_API_KEY}`
 
+export const maxDuration = 60
+
+function getPersonality() {
+  return `คุณคือ "จิ้นน้อย" 🌟 assistant สาวนักวิชาการสายมาร์เก็ตติ้ง ประจำทีม UP Wellness
 บุคลิก:
 - 🎓 นักวิชาการ: อธิบายข้อมูลได้ลึก มีหลักการ น่าเชื่อถือ
 - 📣 Marketing: รู้จักขายไอเดีย ดึงดูดความสนใจ
 - 🌸 น่ารัก สนุก: ใช้ภาษาเข้าใจง่าย ไม่เป็นทางการเกิน
-- ใช้ emoji 2-3 ตัวต่อข้อความ ไม่เยอะเกิน
+- ใช้ emoji 2-3 ตัวต่อข้อความ
 - ลงท้ายด้วย "นะคะ" "ค่ะ" "เลยค่ะ"
 - ให้กำลังใจอบอุ่น จริงใจ ไม่แข็งทื่อ
 - ถ้าอธิบายวิชาการ ให้เปรียบเทียบให้เข้าใจง่ายเสมอ`
@@ -55,28 +59,23 @@ export async function POST(req) {
         direction: 'in'
       })
 
-      const { data: group, error: groupError } = await supabase
+      const { data: group } = await supabase
         .from('groups')
         .select('type, name')
         .eq('id', groupId)
         .single()
 
-      console.log('=== GROUP:', JSON.stringify(group), 'error:', groupError?.message)
+      console.log('=== GROUP:', JSON.stringify(group))
 
       if (!group) {
-        console.log('=== UNKNOWN GROUP → pending')
         await handleUnknownGroup(groupId)
         continue
       }
 
-      console.log('=== GROUP TYPE:', group.type)
-
       if (group.type === 'trainer') {
         await handleTrainer(event, text, groupId, userId)
-
       } else if (group.type === 'customer') {
-        console.log('=== HANDLING CUSTOMER')
-        await handleCustomer(event, text, groupId)
+        await handleCustomer(event, text, groupId, userId)
       }
     }
 
@@ -109,9 +108,7 @@ async function handleUnknownGroup(groupId) {
       )
       const info = await res.json()
       groupName = info.groupName || groupId
-    } catch (e) {
-      console.log('Cannot fetch group name:', e.message)
-    }
+    } catch (e) {}
 
     await supabase.from('pending_groups').insert({
       group_id: groupId,
@@ -136,12 +133,10 @@ async function handleTrainer(event, text, groupId, userId) {
 
   const isResearch = /^(research:|ค้นหา:|สรุป:)/i.test(text)
   if (isResearch) {
-    // reply ก่อน เพราะ replyToken หมดอายุใน 30 วินาที
     await lineClient.replyMessage(event.replyToken, {
       type: 'text',
       text: '🔍 จิ้นน้อยกำลัง research ข้อมูลให้นะคะ รอสักครู่ค่ะ...'
     })
-    // await เพื่อให้ Vercel ไม่ kill ก่อนเสร็จ
     await researchAndSaveDrafts(text, groupId, userId)
     return
   }
@@ -162,39 +157,63 @@ async function handleTrainer(event, text, groupId, userId) {
 // ==============================
 // CUSTOMER
 // ==============================
-async function handleCustomer(event, text, groupId) {
+async function handleCustomer(event, text, groupId, userId) {
   if (!groupHistory[groupId]) groupHistory[groupId] = []
   groupHistory[groupId].push({ role: 'user', text, timestamp: Date.now() })
-
   if (groupHistory[groupId].length > 10) {
     groupHistory[groupId] = groupHistory[groupId].slice(-10)
   }
 
-  console.log('=== CALLING decideAndAnswer')
-  const result = await decideAndAnswer(text, groupId)
-  console.log('=== DECISION RESULT:', JSON.stringify(result))
+  // เช็คว่าขอ image ไหม
+  const isImageRequest = /^(สร้างรูป|วาดรูป|gen รูป|image:|รูปภาพ:)/i.test(text)
+  if (isImageRequest) {
+    await handleImageRequest(event, text, groupId)
+    return
+  }
 
-  if (result.shouldReply) {
+  const result = await decideAndAnswer(text, groupId)
+  console.log('=== DECISION:', JSON.stringify(result))
+
+  if (!result.shouldReply) {
+    console.log('=== BOT SILENT:', result.reason)
+    return
+  }
+
+  // high-risk → ส่ง review queue ไม่ตอบทันที
+  if (result.isHighRisk) {
+    await supabase.from('review_queue').insert({
+      group_id: groupId,
+      line_user_id: userId,
+      question: text,
+      suggested_reply: result.reply,
+      risk_reason: result.riskReason,
+      status: 'pending'
+    })
+
     await lineClient.replyMessage(event.replyToken, {
       type: 'text',
-      text: result.reply
+      text: '🙏 ขอบคุณสำหรับคำถามนะคะ จิ้นน้อยขอให้ทีมผู้เชี่ยวชาญตรวจสอบข้อมูลให้ละเอียดก่อนนะคะ จะรีบแจ้งกลับเร็วๆ นี้ค่ะ 💙'
     })
-
-    await supabase.from('messages').insert({
-      group_id: groupId,
-      line_user_id: 'bot',
-      content: result.reply,
-      direction: 'out'
-    })
-
-    groupHistory[groupId].push({ role: 'bot', text: result.reply, timestamp: Date.now() })
-  } else {
-    console.log('=== BOT DECIDED NOT TO REPLY:', result.reason)
+    return
   }
+
+  await lineClient.replyMessage(event.replyToken, {
+    type: 'text',
+    text: result.reply
+  })
+
+  await supabase.from('messages').insert({
+    group_id: groupId,
+    line_user_id: 'bot',
+    content: result.reply,
+    direction: 'out'
+  })
+
+  groupHistory[groupId].push({ role: 'bot', text: result.reply, timestamp: Date.now() })
 }
 
 // ==============================
-// SMART REPLY
+// SMART REPLY + HIGH-RISK CHECK
 // ==============================
 async function decideAndAnswer(question, groupId) {
   try {
@@ -202,8 +221,6 @@ async function decideAndAnswer(question, groupId) {
       .from('knowledge')
       .select('content')
       .order('created_at', { ascending: false })
-
-    console.log('=== KNOWLEDGE COUNT:', knowledge?.length)
 
     const knowledgeText = knowledge?.length > 0
       ? knowledge.map(k => k.content).join('\n---\n')
@@ -215,15 +232,13 @@ async function decideAndAnswer(question, groupId) {
       .map(m => `${m.role === 'user' ? 'ลูกค้า' : 'จิ้นน้อย'}: ${m.text}`)
       .join('\n')
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `${getPersonality()}
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `${getPersonality()}
 
 ## ข้อมูลหลักจากทีมงาน:
 ${knowledgeText}
@@ -234,38 +249,46 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 ## message ล่าสุด:
 "${question}"
 
-ตอบ JSON เท่านั้น ให้สั้นที่สุด:
-{"shouldReply":true,"reason":"สั้นๆ","reply":"คำตอบ"}`
-            }]
-          }],
-          tools: [{ google_search: {} }],
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 1500
-          }
-        })
-      }
-    )
+## วิเคราะห์และตัดสินใจ:
+กฎ shouldReply:
+- คำถามชัดเจน → true
+- ทักทาย → true ทักกลับสั้นๆ
+- พูดคุยทั่วไป → false
+- คุยมาหลายประโยคแล้ว → true ร่วมวง
+- mention จิ้นน้อย → true เสมอ
+
+กฎ isHighRisk (true ถ้าเข้าข่าย):
+- ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษา
+- แสดงความไม่พอใจ ร้องเรียน โกรธ
+
+ตอบ JSON เท่านั้น:
+{
+  "shouldReply": true/false,
+  "isHighRisk": true/false,
+  "riskReason": "เหตุผลถ้า high-risk",
+  "reason": "เหตุผลสั้นๆ",
+  "reply": "คำตอบในสไตล์จิ้นน้อย"
+}`
+          }]
+        }],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1500
+        }
+      })
+    })
 
     const data = await response.json()
     console.log('=== GEMINI RAW:', JSON.stringify(data))
 
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
-    console.log('=== RAW TEXT:', rawText)
-
-    if (!rawText) {
-      console.log('=== NO RAW TEXT, finishReason:', data?.candidates?.[0]?.finishReason)
-      return { shouldReply: false }
-    }
+    if (!rawText) return { shouldReply: false }
 
     const match = rawText.match(/\{[\s\S]*?\}/)
-    console.log('=== MATCH:', match?.[0])
-
     if (!match) return { shouldReply: false }
 
-    const result = JSON.parse(match[0])
-    console.log('=== RESULT:', JSON.stringify(result))
-    return result
+    return JSON.parse(match[0])
 
   } catch (err) {
     console.error('=== decideAndAnswer error:', err.message)
@@ -274,7 +297,86 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 }
 
 // ==============================
-// RESEARCH
+// IMAGE GENERATION — Imagen 3
+// ==============================
+async function handleImageRequest(event, text, groupId) {
+  try {
+    await lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '🎨 จิ้นน้อยกำลังสร้างรูปให้นะคะ รอสักครู่ค่ะ...'
+    })
+
+    const prompt = text
+      .replace(/^สร้างรูป/i, '')
+      .replace(/^วาดรูป/i, '')
+      .replace(/^gen รูป/i, '')
+      .replace(/^image:/i, '')
+      .replace(/^รูปภาพ:/i, '')
+      .trim()
+
+    console.log('=== IMAGE PROMPT:', prompt)
+
+    const response = await fetch(IMAGEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instances: [{
+          prompt: `${prompt}, professional product photography, clean background, high quality`
+        }],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: '1:1'
+        }
+      })
+    })
+
+    const data = await response.json()
+    console.log('=== IMAGEN RESPONSE:', JSON.stringify(data))
+
+    const base64Image = data?.predictions?.[0]?.bytesBase64Encoded
+    if (!base64Image) throw new Error('No image generated: ' + JSON.stringify(data?.error || ''))
+
+    // อัปโหลด base64 ขึ้น LINE
+    const imageBuffer = Buffer.from(base64Image, 'base64')
+
+    // บันทึกลง Supabase Storage แล้วได้ URL
+    const fileName = `images/${Date.now()}.png`
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('generated-images')
+      .upload(fileName, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false
+      })
+
+    if (uploadError) throw new Error('Upload error: ' + uploadError.message)
+
+    const { data: urlData } = supabase
+      .storage
+      .from('generated-images')
+      .getPublicUrl(fileName)
+
+    const imageUrl = urlData.publicUrl
+    console.log('=== IMAGE URL:', imageUrl)
+
+    // ส่งรูปเข้า LINE
+    await lineClient.pushMessage(groupId, {
+      type: 'image',
+      originalContentUrl: imageUrl,
+      previewImageUrl: imageUrl
+    })
+
+  } catch (err) {
+    console.error('=== IMAGE ERROR:', err.message)
+    await lineClient.pushMessage(groupId, {
+      type: 'text',
+      text: `❌ สร้างรูปไม่สำเร็จค่ะ\nError: ${err.message}\n\nลองใหม่นะคะ 🙏`
+    })
+  }
+}
+
+// ==============================
+// RESEARCH — ไม่มี search
 // ==============================
 async function researchAndSaveDrafts(text, groupId, userId) {
   const topic = text
@@ -286,15 +388,13 @@ async function researchAndSaveDrafts(text, groupId, userId) {
   console.log('=== RESEARCH START:', topic)
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `สรุปความรู้เกี่ยวกับ "${topic}" เป็นภาษาไทย
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `สรุปความรู้เกี่ยวกับ "${topic}" เป็นภาษาไทย
 
 สร้าง 5-7 ข้อความรู้ที่:
 - เป็นประโยคสมบูรณ์ มีบริบทครบ
@@ -304,15 +404,14 @@ async function researchAndSaveDrafts(text, groupId, userId) {
 
 ตอบ JSON array เท่านั้น ห้ามมีข้อความอื่น:
 ["ข้อ1...","ข้อ2...","ข้อ3..."]`
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 2000
-          }
-        })
-      }
-    )
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 2000
+        }
+      })
+    })
 
     const data = await response.json()
     console.log('=== RESEARCH GEMINI:', JSON.stringify(data))
@@ -321,7 +420,7 @@ async function researchAndSaveDrafts(text, groupId, userId) {
     if (!rawText) throw new Error('No response: ' + JSON.stringify(data?.error || ''))
 
     const match = rawText.match(/\[[\s\S]*\]/)
-    if (!match) throw new Error('No JSON array in response')
+    if (!match) throw new Error('No JSON array found')
 
     const items = JSON.parse(match[0])
     if (!Array.isArray(items) || items.length === 0) throw new Error('Empty array')
@@ -349,7 +448,6 @@ async function researchAndSaveDrafts(text, groupId, userId) {
   }
 }
 
-
 // ==============================
 // PROGRAM COMMANDS
 // ==============================
@@ -360,40 +458,29 @@ async function handleCommand(text, groupId) {
   if (cmd === '/วันที่' && parts[1]) {
     const day = parseInt(parts[1])
     if (isNaN(day)) return '❌ รูปแบบไม่ถูกต้องค่ะ ใช้ /วันที่ 5'
-
     const { data: gp } = await supabase
       .from('group_programs')
       .select('id, programs(name)')
       .eq('group_id', groupId)
       .eq('is_active', true)
       .single()
-
     if (!gp) return '❌ ไม่พบโปรแกรมที่ active ในกลุ่มนี้ค่ะ'
-
-    await supabase
-      .from('group_programs')
-      .update({ current_day_override: day })
-      .eq('id', gp.id)
-
-    return `✅ ตั้งค่าแล้วค่ะ! กลุ่มนี้จะส่งเนื้อหา วันที่ ${day} ในรอบถัดไปเลยนะคะ 🎯`
+    await supabase.from('group_programs').update({ current_day_override: day }).eq('id', gp.id)
+    return `✅ ตั้งค่าแล้วค่ะ! จะส่งเนื้อหาวันที่ ${day} ในรอบถัดไปเลยนะคะ 🎯`
   }
 
   if (cmd === '/หยุด') {
     const reason = parts.slice(1).join(' ') || 'ไม่ระบุ'
-    await supabase
-      .from('group_programs')
+    await supabase.from('group_programs')
       .update({ is_paused: true, pause_reason: reason })
-      .eq('group_id', groupId)
-      .eq('is_active', true)
+      .eq('group_id', groupId).eq('is_active', true)
     return `⏸ หยุดโปรแกรมชั่วคราวแล้วค่ะ\nเหตุผล: ${reason}\n\nพิมพ์ /เริ่ม เพื่อเริ่มใหม่นะคะ`
   }
 
   if (cmd === '/เริ่ม') {
-    await supabase
-      .from('group_programs')
+    await supabase.from('group_programs')
       .update({ is_paused: false, pause_reason: null })
-      .eq('group_id', groupId)
-      .eq('is_active', true)
+      .eq('group_id', groupId).eq('is_active', true)
     return `▶️ เริ่มโปรแกรมต่อแล้วค่ะ จิ้นน้อยพร้อมแล้ว! 💪`
   }
 
@@ -401,32 +488,18 @@ async function handleCommand(text, groupId) {
     const { data: gp } = await supabase
       .from('group_programs')
       .select('*, programs(name)')
-      .eq('group_id', groupId)
-      .eq('is_active', true)
+      .eq('group_id', groupId).eq('is_active', true)
       .single()
-
     if (!gp) return '❌ ไม่พบโปรแกรมที่ active ในกลุ่มนี้ค่ะ'
-
     const today = new Date()
     const start = new Date(gp.start_date)
     const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24))
     const currentDay = gp.current_day_override ?? (diffDays + 1)
-
-    return `📊 สถานะโปรแกรมค่ะ\n\n` +
-      `📚 ${gp.programs.name}\n` +
-      `📅 วันที่: ${currentDay}\n` +
-      `⏱ เริ่มตั้งแต่: ${gp.start_date}\n` +
-      `${gp.is_paused ? '⏸ สถานะ: หยุดชั่วคราว' : '▶️ สถานะ: กำลังทำงาน'}` +
-      `${gp.current_day_override ? `\n⚡ Override: วันที่ ${gp.current_day_override}` : ''}`
+    return `📊 สถานะโปรแกรมค่ะ\n\n📚 ${gp.programs.name}\n📅 วันที่: ${currentDay}\n⏱ เริ่มตั้งแต่: ${gp.start_date}\n${gp.is_paused ? '⏸ หยุดชั่วคราว' : '▶️ กำลังทำงาน'}${gp.current_day_override ? `\n⚡ Override: วันที่ ${gp.current_day_override}` : ''}`
   }
 
   if (cmd === '/ช่วยเหลือ') {
-    return `🌸 คำสั่งจิ้นน้อยค่ะ\n\n` +
-      `/วันที่ [เลข] — ข้ามไปวันที่ต้องการ\n` +
-      `/หยุด [เหตุผล] — หยุดโปรแกรมชั่วคราว\n` +
-      `/เริ่ม — เริ่มโปรแกรมต่อ\n` +
-      `/สถานะ — ดูสถานะปัจจุบัน\n\n` +
-      `💡 research: [หัวข้อ] — ให้จิ้นน้อยค้นข้อมูล`
+    return `🌸 คำสั่งจิ้นน้อยค่ะ\n\n/วันที่ [เลข] — ข้ามไปวันที่ต้องการ\n/หยุด [เหตุผล] — หยุดโปรแกรม\n/เริ่ม — เริ่มโปรแกรมต่อ\n/สถานะ — ดูสถานะปัจจุบัน\n\n💡 research: [หัวข้อ] — ให้จิ้นน้อยค้นข้อมูล`
   }
 
   return `❓ ไม่รู้จักคำสั่งนี้ค่ะ พิมพ์ /ช่วยเหลือ เพื่อดูคำสั่งทั้งหมดนะคะ 🌸`
