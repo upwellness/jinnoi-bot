@@ -33,7 +33,14 @@ export async function GET(req) {
       console.log('pending_groups:', data?.length, 'error:', error?.message)
       return NextResponse.json(data || [])
     }
-
+    if (action === 'review_queue') {
+       const { data } = await supabase
+      .from('review_queue')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      return NextResponse.json(data || [])
+    }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
   } catch (err) {
@@ -69,6 +76,24 @@ export async function POST(req) {
       await supabase.from('knowledge').delete().eq('id', body.id)
       return NextResponse.json({ ok: true })
     }
+    if (body.action === 'approve_review') {
+  // ส่งคำตอบเข้า LINE group
+  await lineClient.pushMessage(body.groupId, {
+    type: 'text',
+    text: body.reply
+  })
+  await supabase.from('review_queue')
+    .update({ status: 'approved' })
+    .eq('id', body.id)
+  return NextResponse.json({ ok: true })
+}
+
+if (body.action === 'reject_review') {
+  await supabase.from('review_queue')
+    .update({ status: 'rejected' })
+    .eq('id', body.id)
+  return NextResponse.json({ ok: true })
+}
 
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
