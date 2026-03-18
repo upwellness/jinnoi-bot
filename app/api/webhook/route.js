@@ -273,77 +273,23 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 // RESEARCH
 // ==============================
 async function researchAndSaveDrafts(text, groupId, userId) {
-  try {
-    const topic = text
-      .replace(/^research:/i, '')
-      .replace(/^ค้นหา:/i, '')
-      .replace(/^สรุป:/i, '')
-      .trim()
+  const topic = text
+    .replace(/^research:/i, '')
+    .replace(/^ค้นหา:/i, '')
+    .replace(/^สรุป:/i, '')
+    .trim()
 
-    console.log('=== RESEARCHING:', topic)
+  console.log('=== TRIGGER RESEARCH:', topic)
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `ค้นหาและสรุปข้อมูลเกี่ยวกับ "${topic}"
-
-สร้างความรู้ที่เป็นประโยชน์ 5-8 ข้อ โดย:
-- แต่ละข้อต้องเป็นประโยคสมบูรณ์ มีบริบทครบ
-- เหมาะสำหรับนำไปตอบคำถามลูกค้า
-- ข้อมูลถูกต้อง เชื่อถือได้
-- เขียนเป็นภาษาไทย
-
-ตอบในรูปแบบ JSON array เท่านั้น ห้ามมีข้อความอื่น:
-["ความรู้ข้อที่ 1...", "ความรู้ข้อที่ 2...", "ความรู้ข้อที่ 3..."]`
-            }]
-          }],
-          tools: [{ google_search: {} }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 2000
-          }
-        })
-      }
-    )
-
-    const data = await response.json()
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!rawText) throw new Error('No response from Gemini')
-
-    const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim()
-    const items = JSON.parse(cleaned)
-
-    if (!Array.isArray(items) || items.length === 0) {
-      throw new Error('Invalid format from Gemini')
-    }
-
-    const drafts = items.map(item => ({
-      content: item,
-      group_id: groupId,
-      line_user_id: userId,
-      status: 'pending'
-    }))
-
-    await supabase.from('drafts').insert(drafts)
-
-    await lineClient.pushMessage(groupId, {
-      type: 'text',
-      text: `✅ Research เสร็จแล้วค่ะ!\n\n📚 หัวข้อ: ${topic}\n🔖 สร้างความรู้ได้ ${items.length} ข้อ\n\nรอ admin อนุมัติใน dashboard นะคะ 🙏`
-    })
-
-  } catch (err) {
-    console.error('Research error:', err.message)
-    await lineClient.pushMessage(groupId, {
-      type: 'text',
-      text: `❌ Research ไม่สำเร็จค่ะ กรุณาลองใหม่อีกครั้งนะคะ\nError: ${err.message}`
-    })
-  }
+  // เรียก research API แบบ fire-and-forget
+  // ไม่ต้อง await — webhook จะ return ก่อน แล้ว research ทำต่อ background
+  fetch(`https://${process.env.VERCEL_URL}/api/research`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic, groupId, userId })
+  }).catch(err => console.error('Research trigger error:', err.message))
 }
+
 
 // ==============================
 // PROGRAM COMMANDS
