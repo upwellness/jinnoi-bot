@@ -261,34 +261,42 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 - ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษา
 - แสดงความไม่พอใจ ร้องเรียน โกรธ
 
-ตอบ JSON เท่านั้น:
-{
-  "shouldReply": true/false,
-  "isHighRisk": true/false,
-  "riskReason": "เหตุผลถ้า high-risk",
-  "reason": "เหตุผลสั้นๆ",
-  "reply": "คำตอบในสไตล์จิ้นน้อย"
-}`
+ตอบ 2 ส่วนแยกกัน:
+
+ส่วนที่ 1 — JSON metadata (สั้นๆ เท่านั้น):
+{"shouldReply":true/false,"isHighRisk":true/false,"riskReason":"สั้นๆ","reason":"สั้นๆ"}
+
+ส่วนที่ 2 — REPLY:
+[ข้อความตอบลูกค้าในสไตล์จิ้นน้อย ถ้า shouldReply: true]`
           }]
         }],
         tools: [{ google_search: {} }],
         generationConfig: {
           temperature: 0.4,
-          maxOutputTokens: 1500
+          maxOutputTokens: 3000
         }
       })
     })
 
     const data = await response.json()
-    console.log('=== GEMINI RAW:', JSON.stringify(data))
-
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    console.log('=== RAW TEXT:', rawText)
+
     if (!rawText) return { shouldReply: false }
 
-    const match = rawText.match(/\{[\s\S]*?\}/)
-    if (!match) return { shouldReply: false }
+    // แยก JSON และ reply ออกจากกัน
+    const jsonMatch = rawText.match(/\{[^{}]*\}/)
+    if (!jsonMatch) return { shouldReply: false }
 
-    return JSON.parse(match[0])
+    const meta = JSON.parse(jsonMatch[0])
+
+    // ดึง reply จากส่วนหลัง JSON
+    const replyMatch = rawText.slice(rawText.indexOf(jsonMatch[0]) + jsonMatch[0].length).trim()
+
+    return {
+      ...meta,
+      reply: replyMatch || ''
+    }
 
   } catch (err) {
     console.error('=== decideAndAnswer error:', err.message)
