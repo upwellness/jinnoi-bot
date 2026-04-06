@@ -399,7 +399,8 @@ ${historyText || 'ยังไม่มี'}
 {"shouldReply":true,"isHighRisk":false,"riskReason":"","reason":"","needsSearch":false,"discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null}`
         }]
       }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+      generationConfig: { temperature: 0.2, maxOutputTokens: 512 },
+      thinkingConfig: { thinkingBudget: 0 }
     })
   })
 
