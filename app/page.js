@@ -7,23 +7,38 @@ export default function Dashboard() {
   const [knowledge, setKnowledge] = useState([])
   const [groups, setGroups] = useState([])
   const [pendingGroups, setPendingGroups] = useState([])
+  const [members, setMembers] = useState([])
   const [toast, setToast] = useState('')
   const [loading, setLoading] = useState(false)
-  const [approveModal, setApproveModal] = useState(null) // pending group ที่กำลัง approve
+  const [approveModal, setApproveModal] = useState(null)
+  const [editingNickname, setEditingNickname] = useState(null) // { id, value }
 
   useEffect(() => { fetchAll() }, [])
 
   async function fetchAll() {
-    const [d, k, g, pg] = await Promise.all([
+    const [d, k, g, pg, m] = await Promise.all([
       fetch('/api/admin?action=drafts').then(r => r.json()),
       fetch('/api/admin?action=knowledge').then(r => r.json()),
       fetch('/api/admin?action=groups').then(r => r.json()),
       fetch('/api/admin?action=pending_groups').then(r => r.json()),
+      fetch('/api/admin?action=members').then(r => r.json()),
     ])
     setDrafts(d || [])
     setKnowledge(k || [])
     setGroups(g || [])
     setPendingGroups(pg || [])
+    setMembers(m || [])
+  }
+
+  async function saveNickname(id, nickname) {
+    await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_nickname', id, nickname })
+    })
+    setEditingNickname(null)
+    showToast('✅ บันทึกชื่อแล้วค่ะ')
+    fetchAll()
   }
 
   function showToast(msg) {
@@ -144,6 +159,7 @@ export default function Dashboard() {
     drafts: { title:'Trainer Drafts', sub:`${pendingDrafts.length} รายการรอ approve` },
     knowledge: { title:'Knowledge Base', sub:`${knowledge.length} รายการที่ approve แล้ว` },
     groups: { title:'Groups', sub:`${groups.length} กลุ่มที่ลงทะเบียน` },
+    members: { title:'Members & DISC', sub:`${members.length} สมาชิกในระบบ` },
   }
 
   return (
@@ -180,6 +196,14 @@ export default function Dashboard() {
             {pendingDrafts.length > 0 && <span style={s.badge()}>{pendingDrafts.length}</span>}
           </div>
           <div style={s.nav(page==='knowledge')} onClick={()=>setPage('knowledge')}>◎ Knowledge Base</div>
+        </div>
+
+        <div style={s.navSection}>
+          <div style={{ fontSize:10, color:'#4a5568', fontFamily:'monospace', letterSpacing:'0.1em', padding:'0 8px', marginBottom:4 }}>CONFIG</div>
+          <div style={s.nav(page==='members')} onClick={()=>setPage('members')}>
+            👤 Members & DISC
+            {members.length > 0 && <span style={s.badge('blue')}>{members.length}</span>}
+          </div>
         </div>
 
         <div style={{ marginTop:'auto', padding:'14px 18px', borderTop:'1px solid #22272f', fontSize:11, color:'#4a5568', fontFamily:'monospace' }}>
@@ -411,6 +435,120 @@ export default function Dashboard() {
                     </tbody>
                   </table>
               }
+            </div>
+          )}
+
+          {/* ===== MEMBERS & DISC ===== */}
+          {page === 'members' && (
+            <div>
+              {members.length === 0 ? (
+                <div style={s.emptyState}>
+                  <div style={{ fontSize:40, marginBottom:12 }}>👤</div>
+                  <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>ยังไม่มีสมาชิกในระบบ</div>
+                  <p>สมาชิกจะถูกบันทึกอัตโนมัติ<br/>เมื่อส่งข้อความในกลุ่ม customer</p>
+                </div>
+              ) : (
+                <>
+                  {/* จัดกลุ่มตาม group */}
+                  {Object.entries(
+                    members.reduce((acc, m) => {
+                      const key = m.group_name || m.group_id
+                      if (!acc[key]) acc[key] = []
+                      acc[key].push(m)
+                      return acc
+                    }, {})
+                  ).map(([groupName, groupMembers]) => (
+                    <div key={groupName} style={{ ...s.panel, marginBottom:20 }}>
+                      <div style={s.panelHeader}>
+                        <span style={s.chip('info')}>CUSTOMER</span>
+                        <span style={{ fontWeight:600 }}>{groupName}</span>
+                        <span style={{ marginLeft:'auto', fontSize:11, color:'#4a5568', fontFamily:'monospace' }}>{groupMembers.length} สมาชิก</span>
+                      </div>
+                      <table style={s.table}>
+                        <thead>
+                          <tr>
+                            <th style={s.th}>ชื่อ LINE</th>
+                            <th style={s.th}>NICKNAME</th>
+                            <th style={s.th}>DISC TYPE</th>
+                            <th style={s.th}>DISC SCORES</th>
+                            <th style={s.th}>MSG</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupMembers.map(m => {
+                            const maxScore = Math.max(m.disc_d, m.disc_i, m.disc_s, m.disc_c, 1)
+                            const discColors = { D:'#e53e3e', I:'#f5a623', S:'#06c755', C:'#4299e1' }
+                            const isEditing = editingNickname?.id === m.id
+                            return (
+                              <tr key={m.id}>
+                                <td style={s.td}>
+                                  <div style={{ fontWeight:500 }}>{m.display_name}</div>
+                                  <div style={{ fontSize:10, color:'#4a5568', fontFamily:'monospace', marginTop:2 }}>{m.line_user_id.slice(0,16)}…</div>
+                                </td>
+                                <td style={s.td}>
+                                  {isEditing ? (
+                                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                                      <input
+                                        style={{ ...s.input, padding:'5px 8px', fontSize:12, width:130 }}
+                                        value={editingNickname.value}
+                                        autoFocus
+                                        onChange={e => setEditingNickname({ ...editingNickname, value: e.target.value })}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') saveNickname(m.id, editingNickname.value)
+                                          if (e.key === 'Escape') setEditingNickname(null)
+                                        }}
+                                      />
+                                      <button style={s.btn('success')} onClick={() => saveNickname(m.id, editingNickname.value)}>✓</button>
+                                      <button style={s.btn('ghost')} onClick={() => setEditingNickname(null)}>✕</button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                      <span style={{ fontWeight: m.nickname !== m.display_name ? 600 : 400, color: m.nickname !== m.display_name ? '#00d4aa' : '#e8ecf0' }}>
+                                        {m.nickname}
+                                      </span>
+                                      <button
+                                        style={{ ...s.btn('ghost'), padding:'3px 8px', fontSize:11 }}
+                                        onClick={() => setEditingNickname({ id: m.id, value: m.nickname })}
+                                      >✎</button>
+                                    </div>
+                                  )}
+                                </td>
+                                <td style={s.td}>
+                                  {m.disc_type ? (
+                                    <span style={{ ...s.chip(m.disc_type==='D'?'red':m.disc_type==='I'?'warn':m.disc_type==='S'?'green':'info'), fontSize:13, fontWeight:700, padding:'4px 14px' }}>
+                                      {m.disc_type}
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize:11, color:'#4a5568' }}>— รอข้อมูล</span>
+                                  )}
+                                </td>
+                                <td style={{ ...s.td, minWidth:180 }}>
+                                  {['D','I','S','C'].map(dim => {
+                                    const score = m[`disc_${dim.toLowerCase()}`] || 0
+                                    const pct = Math.round((score / maxScore) * 100)
+                                    return (
+                                      <div key={dim} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                                        <span style={{ width:10, fontSize:10, fontWeight:700, color: discColors[dim], fontFamily:'monospace' }}>{dim}</span>
+                                        <div style={{ flex:1, height:6, background:'#22272f', borderRadius:3, overflow:'hidden' }}>
+                                          <div style={{ width:`${pct}%`, height:'100%', background: discColors[dim], borderRadius:3, transition:'width 0.3s' }} />
+                                        </div>
+                                        <span style={{ fontSize:10, color:'#4a5568', fontFamily:'monospace', width:20, textAlign:'right' }}>{score}</span>
+                                      </div>
+                                    )
+                                  })}
+                                </td>
+                                <td style={{ ...s.td, fontFamily:'monospace', fontSize:12, textAlign:'center' }}>
+                                  {m.message_count}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
 
