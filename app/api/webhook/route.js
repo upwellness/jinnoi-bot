@@ -19,15 +19,100 @@ const IMAGEN_URL = `https://generativelanguage.googleapis.com/v1beta/models/imag
 export const maxDuration = 60
 
 function getPersonality() {
-  return `คุณคือ "จิ้นน้อย" 🌟 assistant สาวนักวิชาการสายมาร์เก็ตติ้ง ประจำทีม UP Wellness
-บุคลิก:
-- 🎓 นักวิชาการ: อธิบายข้อมูลได้ลึก มีหลักการ น่าเชื่อถือ
-- 📣 Marketing: รู้จักขายไอเดีย ดึงดูดความสนใจ
-- 🌸 น่ารัก สนุก: ใช้ภาษาเข้าใจง่าย ไม่เป็นทางการเกิน
-- ใช้ emoji 2-3 ตัวต่อข้อความ
-- ลงท้ายด้วย "นะคะ" "ค่ะ" "เลยค่ะ"
-- ให้กำลังใจอบอุ่น จริงใจ ไม่แข็งทื่อ
-- ถ้าอธิบายวิชาการ ให้เปรียบเทียบให้เข้าใจง่ายเสมอ`
+  return `คุณคือ "จิ้นน้อย" — ตัวแทนดิจิทัลของ จิ้น ผู้เชี่ยวชาญด้าน Wellness Marketing
+
+## บุคลิกหลัก (DISC: D-C)
+- D (Dominance): ตรงประเด็น กล้าตัดสินใจ บอกผลลัพธ์ชัดเจน ไม่อ้อมค้อม
+- C (Conscientiousness): แม่นยำ มีหลักการ อ้างอิงข้อมูลได้ ไม่พูดมั่ว
+
+## Archetypes (เรียงตามความเด่น)
+1. 🔮 Sage: แสวงหาความจริง อธิบายด้วยหลักการ ให้ปัญญา ไม่ใช่แค่ข้อมูล
+2. 👑 Ruler: นำทาง จัดระเบียบความคิด ควบคุมบทสนทนาให้มีทิศทาง
+3. 🧭 Explorer: กล้าลองมุมใหม่ มองหาสิ่งที่คนอื่นยังไม่เห็น
+
+## สไตล์การสื่อสาร
+- ตรงประเด็น ไม่ยืดเยื้อ ใช้ข้อมูลและตัวเลขสนับสนุน
+- มีอารมณ์ขันเล็กน้อย แต่ไม่ลืม substance
+- ใช้ emoji 1-2 ตัว (ไม่เยอะ)
+- ลงท้ายด้วย "ค่ะ" หรือ "เลยค่ะ"`
+}
+
+// ==============================
+// DISC HELPERS
+// ==============================
+function getDiscStyle(discType) {
+  const styles = {
+    D: 'ตรงประเด็น สั้น ระบุผลลัพธ์ชัดเจน ไม่ต้องอธิบายพื้นหลังมาก พูดถึงประสิทธิภาพและผลลัพธ์',
+    I: 'สนุก มีพลังงาน เล่าเรื่อง เชื่อมโยงความสัมพันธ์ ใช้ emoji มากขึ้น ชวนให้ excited',
+    S: 'อ่อนโยน ใจเย็น อธิบายทีละขั้น ให้ความมั่นใจ ไม่กดดัน เน้นความปลอดภัยและความต่อเนื่อง',
+    C: 'ละเอียด มีข้อมูลอ้างอิง ตอบ "ทำไม" ให้เหตุผลและตัวเลข เน้นความถูกต้องและกระบวนการ'
+  }
+  return styles[discType] || 'ตอบตามธรรมชาติ ยังไม่มีข้อมูล DISC เพียงพอ'
+}
+
+// ==============================
+// USER PROFILE — ดึงหรือสร้างใหม่
+// ==============================
+async function getOrCreateUserProfile(groupId, userId) {
+  const { data: existing } = await supabase
+    .from('user_profiles')
+    .select('*')
+    .eq('group_id', groupId)
+    .eq('line_user_id', userId)
+    .single()
+
+  if (existing) return existing
+
+  // ดึงชื่อจาก LINE API
+  let displayName = 'สมาชิก'
+  try {
+    const res = await fetch(
+      `https://api.line.me/v2/bot/group/${groupId}/member/${userId}`,
+      { headers: { Authorization: `Bearer ${process.env.LINE_ACCESS_TOKEN}` } }
+    )
+    const profile = await res.json()
+    displayName = profile.displayName || displayName
+  } catch (e) {}
+
+  const { data: newProfile } = await supabase
+    .from('user_profiles')
+    .insert({
+      group_id: groupId,
+      line_user_id: userId,
+      display_name: displayName,
+      nickname: displayName,
+      disc_d: 0, disc_i: 0, disc_s: 0, disc_c: 0,
+      disc_type: null,
+      message_count: 0
+    })
+    .select()
+    .single()
+
+  return newProfile || { group_id: groupId, line_user_id: userId, display_name: displayName, nickname: displayName, disc_d: 0, disc_i: 0, disc_s: 0, disc_c: 0, disc_type: null, message_count: 0 }
+}
+
+async function updateUserDisc(profile, discUpdate, discType) {
+  if (!profile?.id) return
+  const newD = (profile.disc_d || 0) + (discUpdate?.d || 0)
+  const newI = (profile.disc_i || 0) + (discUpdate?.i || 0)
+  const newS = (profile.disc_s || 0) + (discUpdate?.s || 0)
+  const newC = (profile.disc_c || 0) + (discUpdate?.c || 0)
+
+  // คำนวณ type จากคะแนนสะสม
+  const max = Math.max(newD, newI, newS, newC)
+  const resolvedType = discType || (
+    max === newD ? 'D' : max === newI ? 'I' : max === newS ? 'S' : 'C'
+  )
+
+  await supabase
+    .from('user_profiles')
+    .update({
+      disc_d: newD, disc_i: newI, disc_s: newS, disc_c: newC,
+      disc_type: resolvedType,
+      message_count: (profile.message_count || 0) + 1,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', profile.id)
 }
 
 export async function POST(req) {
@@ -171,8 +256,16 @@ async function handleCustomer(event, text, groupId, userId) {
     return
   }
 
-  const result = await decideAndAnswer(text, groupId)
+  // ดึง user profile (ชื่อ + DISC)
+  const userProfile = await getOrCreateUserProfile(groupId, userId)
+
+  const result = await decideAndAnswer(text, groupId, userProfile)
   console.log('=== DECISION:', JSON.stringify(result))
+
+  // อัปเดต DISC เสมอ ไม่ว่าจะตอบหรือไม่
+  if (result.discUpdate) {
+    await updateUserDisc(userProfile, result.discUpdate, result.discType)
+  }
 
   if (!result.shouldReply) {
     console.log('=== BOT SILENT:', result.reason)
@@ -215,7 +308,7 @@ async function handleCustomer(event, text, groupId, userId) {
 // ==============================
 // SMART REPLY + HIGH-RISK CHECK
 // ==============================
-async function decideAndAnswer(question, groupId) {
+async function decideAndAnswer(question, groupId, userProfile = {}) {
   try {
     const { data: knowledge } = await supabase
       .from('knowledge')
@@ -227,10 +320,16 @@ async function decideAndAnswer(question, groupId) {
       : 'ยังไม่มีข้อมูล'
 
     const history = groupHistory[groupId] || []
+    const userName = userProfile.nickname || userProfile.display_name || 'สมาชิก'
     const historyText = history
       .slice(-6)
-      .map(m => `${m.role === 'user' ? 'ลูกค้า' : 'จิ้นน้อย'}: ${m.text}`)
+      .map(m => `${m.role === 'user' ? userName : 'จิ้นน้อย'}: ${m.text}`)
       .join('\n')
+
+    const discType = userProfile.disc_type
+    const discInfo = discType
+      ? `DISC Type: ${discType} (${getDiscStyle(discType)})\nคะแนนสะสม D=${userProfile.disc_d} I=${userProfile.disc_i} S=${userProfile.disc_s} C=${userProfile.disc_c} (จาก ${userProfile.message_count} ข้อความ)`
+      : `DISC: ยังไม่มีข้อมูลเพียงพอ (${userProfile.message_count || 0} ข้อความ) — ประเมินจากข้อความนี้ก็ได้`
 
     const response = await fetch(GEMINI_URL, {
       method: 'POST',
@@ -243,31 +342,45 @@ async function decideAndAnswer(question, groupId) {
 ## ข้อมูลหลักจากทีมงาน:
 ${knowledgeText}
 
-## บทสนทนาล่าสุด:
+## ข้อมูลคนที่ถาม:
+ชื่อ: ${userName}
+${discInfo}
+
+## วิธีปรับตอบตาม DISC ของคนนี้:
+${getDiscStyle(discType)}
+
+## บทสนทนาล่าสุดในกลุ่ม:
 ${historyText || 'ยังไม่มีบทสนทนา'}
 
-## message ล่าสุด:
+## message ล่าสุดจาก ${userName}:
 "${question}"
 
 ## วิเคราะห์และตัดสินใจ:
-กฎ shouldReply:
-- คำถามชัดเจน → true
-- ทักทาย → true ทักกลับสั้นๆ
-- พูดคุยทั่วไป → false
-- คุยมาหลายประโยคแล้ว → true ร่วมวง
-- mention จิ้นน้อย → true เสมอ
 
-กฎ isHighRisk (true ถ้าเข้าข่าย):
-- ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษา
-- แสดงความไม่พอใจ ร้องเรียน โกรธ
+กฎ shouldReply (เข้าไป involve เฉพาะเมื่อ):
+- ถามคำถามที่ชัดเจน ต้องการคำตอบ → true
+- mention "จิ้นน้อย" โดยตรง → true เสมอ
+- ทักทายทั่วไป → true ตอบสั้นๆ
+- คุยกันเองในกลุ่ม ไม่ได้ถามอะไร → false (อย่าไปขัด)
+- บอกสิ่งที่กำลังทำ เล่าเรื่อง ไม่ได้ถาม → false
+- ถามกันเองระหว่างสมาชิก ไม่เกี่ยวบอท → false
+
+กฎ isHighRisk:
+- ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษาเฉพาะบุคคล → true
+- แสดงความไม่พอใจ ร้องเรียน โกรธ → true
+
+กฎ discUpdate (ประเมินสไตล์จากข้อความนี้):
+- เพิ่มคะแนน 0-2 ต่อ dimension ตามสัญญาณที่เห็นในข้อความ
 
 ตอบเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่นนอก JSON:
 {
   "shouldReply": true,
   "isHighRisk": false,
   "riskReason": "",
-  "reason": "สั้นๆ",
-  "reply": "ข้อความตอบลูกค้าในสไตล์จิ้นน้อย (ถ้า shouldReply false ให้เป็น empty string)"
+  "reason": "สั้นๆ ว่าทำไมถึง involve หรือ silent",
+  "discUpdate": {"d": 0, "i": 0, "s": 0, "c": 0},
+  "discType": "D/I/S/C หรือ null ถ้าข้อมูลน้อยเกินไป",
+  "reply": "ข้อความตอบในสไตล์จิ้นน้อย ปรับตาม DISC ของ ${userName} (empty string ถ้า shouldReply: false)"
 }`
           }]
         }],
@@ -503,8 +616,44 @@ async function handleCommand(text, groupId) {
     return `📊 สถานะโปรแกรมค่ะ\n\n📚 ${gp.programs.name}\n📅 วันที่: ${currentDay}\n⏱ เริ่มตั้งแต่: ${gp.start_date}\n${gp.is_paused ? '⏸ หยุดชั่วคราว' : '▶️ กำลังทำงาน'}${gp.current_day_override ? `\n⚡ Override: วันที่ ${gp.current_day_override}` : ''}`
   }
 
+  if (cmd === '/ชื่อ') {
+    // /ชื่อ [ชื่อเดิม/LINE name] [ชื่อใหม่]
+    // เช่น /ชื่อ สมชาย คุณสมชาย
+    if (parts.length < 3) return '❌ รูปแบบ: /ชื่อ [ชื่อเดิม] [ชื่อที่ต้องการ]\nเช่น /ชื่อ สมชาย คุณสมชาย'
+    const oldName = parts[1]
+    const newNickname = parts.slice(2).join(' ')
+    const { data: profiles, error } = await supabase
+      .from('user_profiles')
+      .select('id, display_name, nickname')
+      .eq('group_id', groupId)
+      .ilike('display_name', `%${oldName}%`)
+    if (!profiles?.length) return `❌ ไม่พบสมาชิกชื่อ "${oldName}" ในกลุ่มนี้ค่ะ`
+    if (profiles.length > 1) {
+      const names = profiles.map(p => p.display_name).join(', ')
+      return `⚠️ พบหลายคนที่ชื่อใกล้เคียง: ${names}\nโปรดระบุชื่อให้ตรงกว่านี้ค่ะ`
+    }
+    await supabase
+      .from('user_profiles')
+      .update({ nickname: newNickname })
+      .eq('id', profiles[0].id)
+    return `✅ เปลี่ยนชื่อ "${profiles[0].display_name}" เป็น "${newNickname}" แล้วค่ะ 🌸`
+  }
+
+  if (cmd === '/ดูชื่อ') {
+    const { data: profiles } = await supabase
+      .from('user_profiles')
+      .select('display_name, nickname, disc_type, message_count')
+      .eq('group_id', groupId)
+      .order('message_count', { ascending: false })
+    if (!profiles?.length) return '📋 ยังไม่มีสมาชิกในกลุ่มนี้ค่ะ'
+    const list = profiles.map(p =>
+      `• ${p.display_name}${p.nickname !== p.display_name ? ` → "${p.nickname}"` : ''} [DISC: ${p.disc_type || '?'}] (${p.message_count} msg)`
+    ).join('\n')
+    return `📋 สมาชิกในกลุ่มค่ะ\n\n${list}`
+  }
+
   if (cmd === '/ช่วยเหลือ') {
-    return `🌸 คำสั่งจิ้นน้อยค่ะ\n\n/วันที่ [เลข] — ข้ามไปวันที่ต้องการ\n/หยุด [เหตุผล] — หยุดโปรแกรม\n/เริ่ม — เริ่มโปรแกรมต่อ\n/สถานะ — ดูสถานะปัจจุบัน\n\n💡 research: [หัวข้อ] — ให้จิ้นน้อยค้นข้อมูล`
+    return `🌸 คำสั่งจิ้นน้อยค่ะ\n\n/วันที่ [เลข] — ข้ามไปวันที่ต้องการ\n/หยุด [เหตุผล] — หยุดโปรแกรม\n/เริ่ม — เริ่มโปรแกรมต่อ\n/สถานะ — ดูสถานะปัจจุบัน\n/ชื่อ [ชื่อเดิม] [ชื่อใหม่] — ตั้งชื่อเรียกสมาชิก\n/ดูชื่อ — ดูรายชื่อ + DISC สมาชิกทั้งหมด\n\n💡 research: [หัวข้อ] — ให้จิ้นน้อยค้นข้อมูล`
   }
 
   return `❓ ไม่รู้จักคำสั่งนี้ค่ะ พิมพ์ /ช่วยเหลือ เพื่อดูคำสั่งทั้งหมดนะคะ 🌸`
