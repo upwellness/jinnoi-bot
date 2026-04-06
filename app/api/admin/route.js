@@ -1,6 +1,11 @@
 // v4
 import { NextResponse } from 'next/server'
+import { Client } from '@line/bot-sdk'
 import { createClient } from '@supabase/supabase-js'
+
+const lineClient = new Client({
+  channelAccessToken: process.env.LINE_ACCESS_TOKEN
+})
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
