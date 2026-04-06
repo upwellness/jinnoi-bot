@@ -261,13 +261,14 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 - ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษา
 - แสดงความไม่พอใจ ร้องเรียน โกรธ
 
-ตอบ 2 ส่วนแยกกัน:
-
-ส่วนที่ 1 — JSON metadata (สั้นๆ เท่านั้น):
-{"shouldReply":true/false,"isHighRisk":true/false,"riskReason":"สั้นๆ","reason":"สั้นๆ"}
-
-ส่วนที่ 2 — REPLY:
-[ข้อความตอบลูกค้าในสไตล์จิ้นน้อย ถ้า shouldReply: true]`
+ตอบเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่นนอก JSON:
+{
+  "shouldReply": true,
+  "isHighRisk": false,
+  "riskReason": "",
+  "reason": "สั้นๆ",
+  "reply": "ข้อความตอบลูกค้าในสไตล์จิ้นน้อย (ถ้า shouldReply false ให้เป็น empty string)"
+}`
           }]
         }],
         tools: [{ google_search: {} }],
@@ -279,27 +280,20 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
     })
 
     const data = await response.json()
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    // Gemini อาจ return หลาย parts เมื่อใช้ google_search — รวม text ทุก part
+    const parts = data?.candidates?.[0]?.content?.parts || []
+    const rawText = parts.map(p => p.text || '').join('')
     console.log('=== RAW TEXT:', rawText)
 
     if (!rawText) return { shouldReply: false }
 
-    // strip markdown code fences ก่อน (Gemini บางครั้ง wrap JSON ใน ```json...```)
-    const cleanText = rawText.replace(/```[a-z]*\n?/gi, '').trim()
-
-    // แยก JSON และ reply ออกจากกัน
-    const jsonMatch = cleanText.match(/\{[^{}]*\}/)
+    // strip markdown code fences แล้ว parse JSON
+    const cleanText = rawText.replace(/```[a-z]*/gi, '').trim()
+    const jsonMatch = cleanText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return { shouldReply: false }
 
     const meta = JSON.parse(jsonMatch[0])
-
-    // ดึง reply จากส่วนหลัง JSON
-    const replyMatch = cleanText.slice(cleanText.indexOf(jsonMatch[0]) + jsonMatch[0].length).trim()
-
-    return {
-      ...meta,
-      reply: replyMatch || ''
-    }
+    return meta
 
   } catch (err) {
     console.error('=== decideAndAnswer error:', err.message)
