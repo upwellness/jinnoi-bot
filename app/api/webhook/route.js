@@ -284,14 +284,17 @@ ${historyText || 'ยังไม่มีบทสนทนา'}
 
     if (!rawText) return { shouldReply: false }
 
+    // strip markdown code fences ก่อน (Gemini บางครั้ง wrap JSON ใน ```json...```)
+    const cleanText = rawText.replace(/```[a-z]*\n?/gi, '').trim()
+
     // แยก JSON และ reply ออกจากกัน
-    const jsonMatch = rawText.match(/\{[^{}]*\}/)
+    const jsonMatch = cleanText.match(/\{[^{}]*\}/)
     if (!jsonMatch) return { shouldReply: false }
 
     const meta = JSON.parse(jsonMatch[0])
 
     // ดึง reply จากส่วนหลัง JSON
-    const replyMatch = rawText.slice(rawText.indexOf(jsonMatch[0]) + jsonMatch[0].length).trim()
+    const replyMatch = cleanText.slice(cleanText.indexOf(jsonMatch[0]) + jsonMatch[0].length).trim()
 
     return {
       ...meta,
