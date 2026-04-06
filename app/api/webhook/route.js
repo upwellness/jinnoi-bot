@@ -640,16 +640,35 @@ async function handleCommand(text, groupId) {
   }
 
   if (cmd === '/ดูชื่อ') {
+    // ดึงทุก group (customer groups) ที่มี profiles พร้อม group name
     const { data: profiles } = await supabase
       .from('user_profiles')
-      .select('display_name, nickname, disc_type, message_count')
-      .eq('group_id', groupId)
+      .select('display_name, nickname, disc_type, message_count, group_id')
       .order('message_count', { ascending: false })
-    if (!profiles?.length) return '📋 ยังไม่มีสมาชิกในกลุ่มนี้ค่ะ'
-    const list = profiles.map(p =>
-      `• ${p.display_name}${p.nickname !== p.display_name ? ` → "${p.nickname}"` : ''} [DISC: ${p.disc_type || '?'}] (${p.message_count} msg)`
-    ).join('\n')
-    return `📋 สมาชิกในกลุ่มค่ะ\n\n${list}`
+    if (!profiles?.length) return '📋 ยังไม่มีสมาชิกในระบบเลยค่ะ\n\n💡 สมาชิกจะถูกบันทึกอัตโนมัติเมื่อส่งข้อความในกลุ่ม customer ค่ะ'
+
+    // ดึงชื่อกลุ่มมาประกอบ
+    const { data: groups } = await supabase
+      .from('groups')
+      .select('id, name')
+    const groupMap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
+
+    // จัดกลุ่มตาม group_id
+    const byGroup = {}
+    for (const p of profiles) {
+      const gName = groupMap[p.group_id] || p.group_id
+      if (!byGroup[gName]) byGroup[gName] = []
+      byGroup[gName].push(p)
+    }
+
+    const sections = Object.entries(byGroup).map(([gName, members]) => {
+      const list = members.map(p =>
+        `  • ${p.nickname !== p.display_name ? `${p.nickname} (${p.display_name})` : p.display_name} [DISC: ${p.disc_type || '?'}] (${p.message_count} msg)`
+      ).join('\n')
+      return `📌 ${gName}\n${list}`
+    }).join('\n\n')
+
+    return `📋 สมาชิกทั้งหมดค่ะ\n\n${sections}`
   }
 
   if (cmd === '/ช่วยเหลือ') {
