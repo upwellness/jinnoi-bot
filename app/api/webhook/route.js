@@ -436,7 +436,7 @@ ${historyText || 'ยังไม่มี'}
 ตอบแค่ข้อความ ไม่ต้อง JSON ไม่ต้อง prefix ใดๆ`
         }]
       }],
-      generationConfig: { temperature: 0.5, maxOutputTokens: 600 }
+      generationConfig: { temperature: 0.5, maxOutputTokens: 2048 }
     })
   })
 
