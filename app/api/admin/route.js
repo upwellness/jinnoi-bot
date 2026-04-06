@@ -39,12 +39,24 @@ export async function GET(req) {
       return NextResponse.json(data || [])
     }
     if (action === 'review_queue') {
-       const { data } = await supabase
-      .from('review_queue')
-      .select('*')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
+      const { data } = await supabase
+        .from('review_queue')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
       return NextResponse.json(data || [])
+    }
+    if (action === 'members') {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .order('message_count', { ascending: false })
+      const { data: groups } = await supabase
+        .from('groups')
+        .select('id, name')
+      const groupMap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
+      const result = (profiles || []).map(p => ({ ...p, group_name: groupMap[p.group_id] || p.group_id }))
+      return NextResponse.json(result)
     }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
@@ -79,6 +91,10 @@ export async function POST(req) {
     }
     if (body.action === 'delete_knowledge') {
       await supabase.from('knowledge').delete().eq('id', body.id)
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'update_nickname') {
+      await supabase.from('user_profiles').update({ nickname: body.nickname }).eq('id', body.id)
       return NextResponse.json({ ok: true })
     }
     if (body.action === 'approve_review') {
