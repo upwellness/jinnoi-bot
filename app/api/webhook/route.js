@@ -12,9 +12,43 @@ const supabase = createClient(
 
 const groupHistory = {}
 
+// Knowledge cache — refresh ทุก 5 นาที แทนการ query ทุก request
+let knowledgeCache = null
+let knowledgeCacheAt = 0
+const KNOWLEDGE_TTL = 5 * 60 * 1000
+
+async function getKnowledge() {
+  const now = Date.now()
+  if (knowledgeCache && (now - knowledgeCacheAt) < KNOWLEDGE_TTL) return knowledgeCache
+  const { data } = await supabase
+    .from('knowledge')
+    .select('content')
+    .order('created_at', { ascending: false })
+    .limit(20)
+  knowledgeCache = data?.length > 0 ? data.map(k => k.content).join('\n---\n') : 'ยังไม่มีข้อมูล'
+  knowledgeCacheAt = now
+  return knowledgeCache
+}
+
+// Pre-filter ด้วย rule ก่อน เพื่อไม่ต้องเรียก Gemini ทุก message
+function quickFilter(text) {
+  // mention ชื่อบอทโดยตรง → ตอบเสมอ
+  if (/จิ้นน้อย/i.test(text)) return true
+
+  // มีสัญญาณว่าถามคำถาม
+  if (/\?|？|ได้ไหม|ดีไหม|ยังไง|เป็นยังไง|อยากรู้|แนะนำ|ช่วย|ถาม|อธิบาย|หมายความว่า|วิธี|สั่งซื้อ|ราคา|ส่วนลด|โปรโมชั่น|สมัคร|ลอง|เหมาะ|เหมาะกับ/.test(text)) return true
+
+  // ข้อความที่ชัดว่าไม่ต้องตอบ
+  if (/^(ขอบคุณ|โอเค|โอเค|ok|OK|ок|555+|ฮ่า+|😂|🙏|👍|👎|❤️|😊|ดีเลย|เข้าใจแล้ว|รับทราบ|ทราบแล้ว|เดี๋ยวลอง|ลองดู|โอเค้|เออ|อ๋อ|อ้อ|ใช่เลย|จริงด้วย)/.test(text.trim())) return false
+
+  // ข้อความสั้นมากที่ไม่ใช่คำถาม (< 5 ตัวอักษร ไม่มี keyword)
+  if (text.length < 5) return false
+
+  return null // ไม่แน่ใจ → ให้ Gemini ตัดสิน
+}
+
 const GEMINI_MODEL = 'gemini-2.5-flash'
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`
-const IMAGEN_URL = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${process.env.GEMINI_API_KEY}`
 
 export const maxDuration = 60
 
@@ -249,10 +283,10 @@ async function handleCustomer(event, text, groupId, userId) {
     groupHistory[groupId] = groupHistory[groupId].slice(-10)
   }
 
-  // เช็คว่าขอ image ไหม
-  const isImageRequest = /^(สร้างรูป|วาดรูป|gen รูป|image:|รูปภาพ:)/i.test(text)
-  if (isImageRequest) {
-    await handleImageRequest(event, text, groupId)
+  // Pre-filter ก่อน — ถ้ารู้แน่ว่าไม่ต้องตอบ ไม่ต้องเรียก Gemini เลย
+  const quickDecision = quickFilter(text)
+  if (quickDecision === false) {
+    console.log('=== QUICK FILTER: silent')
     return
   }
 
@@ -306,190 +340,138 @@ async function handleCustomer(event, text, groupId, userId) {
 }
 
 // ==============================
-// SMART REPLY + HIGH-RISK CHECK
+// SMART REPLY — 3-TIER
 // ==============================
-async function decideAndAnswer(question, groupId, userProfile = {}) {
-  try {
-    const { data: knowledge } = await supabase
-      .from('knowledge')
-      .select('content')
-      .order('created_at', { ascending: false })
 
-    const knowledgeText = knowledge?.length > 0
-      ? knowledge.map(k => k.content).join('\n---\n')
-      : 'ยังไม่มีข้อมูล'
+function buildPromptContext(groupId, userProfile) {
+  const userName = userProfile.nickname || userProfile.display_name || 'สมาชิก'
+  const history = groupHistory[groupId] || []
+  const historyText = history
+    .slice(-4)
+    .map(m => `${m.role === 'user' ? userName : 'จิ้นน้อย'}: ${m.text}`)
+    .join('\n')
+  const discType = userProfile.disc_type
+  const discInfo = discType
+    ? `DISC: ${discType} — ${getDiscStyle(discType)} (${userProfile.message_count} ข้อความสะสม)`
+    : `DISC: ยังไม่มีข้อมูล (${userProfile.message_count || 0} ข้อความ) — ประเมินจากข้อความนี้ก็ได้`
+  return { userName, historyText, discInfo }
+}
 
-    const history = groupHistory[groupId] || []
-    const userName = userProfile.nickname || userProfile.display_name || 'สมาชิก'
-    const historyText = history
-      .slice(-6)
-      .map(m => `${m.role === 'user' ? userName : 'จิ้นน้อย'}: ${m.text}`)
-      .join('\n')
+function parseGeminiJson(rawText) {
+  if (!rawText) return null
+  const clean = rawText.replace(/```[a-z]*/gi, '').trim()
+  const match = clean.match(/\{[\s\S]*\}/)
+  if (!match) return null
+  try { return JSON.parse(match[0]) } catch { return null }
+}
 
-    const discType = userProfile.disc_type
-    const discInfo = discType
-      ? `DISC Type: ${discType} (${getDiscStyle(discType)})\nคะแนนสะสม D=${userProfile.disc_d} I=${userProfile.disc_i} S=${userProfile.disc_s} C=${userProfile.disc_c} (จาก ${userProfile.message_count} ข้อความ)`
-      : `DISC: ยังไม่มีข้อมูลเพียงพอ (${userProfile.message_count || 0} ข้อความ) — ประเมินจากข้อความนี้ก็ได้`
+// Tier 2 — Gemini + knowledge base เท่านั้น (ถูก เร็ว)
+async function tier2Reply(question, groupId, userProfile, knowledgeText) {
+  const { userName, historyText, discInfo } = buildPromptContext(groupId, userProfile)
 
-    const response = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `${getPersonality()}
+  const response = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{
+          text: `${getPersonality()}
 
-## ข้อมูลหลักจากทีมงาน:
+## ข้อมูลจากทีมงาน:
 ${knowledgeText}
 
-## ข้อมูลคนที่ถาม:
-ชื่อ: ${userName}
+## ผู้ส่ง: ${userName}
 ${discInfo}
 
-## วิธีปรับตอบตาม DISC ของคนนี้:
-${getDiscStyle(discType)}
+## บทสนทนาล่าสุด:
+${historyText || 'ยังไม่มี'}
 
-## บทสนทนาล่าสุดในกลุ่ม:
-${historyText || 'ยังไม่มีบทสนทนา'}
+## ข้อความ: "${question}"
 
-## message ล่าสุดจาก ${userName}:
-"${question}"
+## ตัดสินใจ:
+shouldReply: true ถ้าถามคำถาม / mention จิ้นน้อย / ทักทาย — false ถ้าคุยกันเอง/เล่าเรื่อง/บอกเล่า
+isHighRisk: true ถ้าถามโรค/ยา/รักษา หรือแสดงความไม่พอใจ
+needsSearch: true ถ้าคำถามต้องการข้อมูล real-time หรือ knowledge base ไม่มีคำตอบที่ชัดเจน (เช่น ราคาตลาด งานวิจัยใหม่ สถิติล่าสุด)
+discUpdate: เพิ่ม 0-2 ต่อ dimension จากสัญญาณในข้อความ
 
-## วิเคราะห์และตัดสินใจ:
-
-กฎ shouldReply (เข้าไป involve เฉพาะเมื่อ):
-- ถามคำถามที่ชัดเจน ต้องการคำตอบ → true
-- mention "จิ้นน้อย" โดยตรง → true เสมอ
-- ทักทายทั่วไป → true ตอบสั้นๆ
-- คุยกันเองในกลุ่ม ไม่ได้ถามอะไร → false (อย่าไปขัด)
-- บอกสิ่งที่กำลังทำ เล่าเรื่อง ไม่ได้ถาม → false
-- ถามกันเองระหว่างสมาชิก ไม่เกี่ยวบอท → false
-
-กฎ isHighRisk:
-- ถามเรื่องโรค วินิจฉัยอาการ ยา การรักษาเฉพาะบุคคล → true
-- แสดงความไม่พอใจ ร้องเรียน โกรธ → true
-
-กฎ discUpdate (ประเมินสไตล์จากข้อความนี้):
-- เพิ่มคะแนน 0-2 ต่อ dimension ตามสัญญาณที่เห็นในข้อความ
-
-ตอบเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่นนอก JSON:
-{
-  "shouldReply": true,
-  "isHighRisk": false,
-  "riskReason": "",
-  "reason": "สั้นๆ ว่าทำไมถึง involve หรือ silent",
-  "discUpdate": {"d": 0, "i": 0, "s": 0, "c": 0},
-  "discType": "D/I/S/C หรือ null ถ้าข้อมูลน้อยเกินไป",
-  "reply": "ข้อความตอบในสไตล์จิ้นน้อย ปรับตาม DISC ของ ${userName} (empty string ถ้า shouldReply: false)"
-}`
-          }]
-        }],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 3000
-        }
-      })
+ตอบ JSON เดียว ห้ามมีข้อความอื่น:
+{"shouldReply":true,"isHighRisk":false,"riskReason":"","reason":"","needsSearch":false,"discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null,"reply":""}`
+        }]
+      }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 800 }
     })
+  })
 
-    const data = await response.json()
-    // Gemini อาจ return หลาย parts เมื่อใช้ google_search — รวม text ทุก part
-    const parts = data?.candidates?.[0]?.content?.parts || []
-    const rawText = parts.map(p => p.text || '').join('')
-    console.log('=== RAW TEXT:', rawText)
+  const data = await response.json()
+  const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
+  console.log('=== TIER2 RAW:', rawText)
+  return parseGeminiJson(rawText)
+}
 
-    if (!rawText) return { shouldReply: false }
+// Tier 3 — Gemini + google_search (แรง ใช้เฉพาะเมื่อ needsSearch: true)
+async function tier3Reply(question, groupId, userProfile) {
+  const { userName, historyText, discInfo } = buildPromptContext(groupId, userProfile)
 
-    // strip markdown code fences แล้ว parse JSON
-    const cleanText = rawText.replace(/```[a-z]*/gi, '').trim()
-    const jsonMatch = cleanText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return { shouldReply: false }
+  const response = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{
+          text: `${getPersonality()}
 
-    const meta = JSON.parse(jsonMatch[0])
-    return meta
+## ผู้ส่ง: ${userName}
+${discInfo}
+
+## บทสนทนาล่าสุด:
+${historyText || 'ยังไม่มี'}
+
+## ข้อความ: "${question}"
+
+ค้นหาข้อมูลแล้วตอบในสไตล์จิ้นน้อย ตาม DISC ของผู้ส่ง
+isHighRisk: true ถ้าถามโรค/ยา/รักษา หรือแสดงความไม่พอใจ
+
+ตอบ JSON เดียว ห้ามมีข้อความอื่น:
+{"isHighRisk":false,"riskReason":"","discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null,"reply":""}`
+        }]
+      }],
+      tools: [{ google_search: {} }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 1200 }
+    })
+  })
+
+  const data = await response.json()
+  const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
+  console.log('=== TIER3 RAW:', rawText)
+  return parseGeminiJson(rawText)
+}
+
+async function decideAndAnswer(question, groupId, userProfile = {}) {
+  try {
+    const knowledgeText = await getKnowledge()
+
+    // Tier 2 — ถูกก่อน
+    const t2 = await tier2Reply(question, groupId, userProfile, knowledgeText)
+    console.log('=== TIER2 DECISION:', JSON.stringify(t2))
+
+    if (!t2) return { shouldReply: false }
+
+    // ถ้า Tier 2 บอกว่าไม่ต้องตอบ หรือ high-risk — จบได้เลย
+    if (!t2.shouldReply || t2.isHighRisk) return { ...t2, shouldReply: t2.shouldReply }
+
+    // Tier 2 ตอบได้และไม่ต้อง search → ใช้เลย
+    if (!t2.needsSearch) return t2
+
+    // Tier 3 — ต้องการ search
+    console.log('=== ESCALATE TO TIER3')
+    const t3 = await tier3Reply(question, groupId, userProfile)
+    if (!t3) return t2 // fallback ถ้า Tier 3 พัง
+
+    return { ...t3, shouldReply: true, discUpdate: t3.discUpdate || t2.discUpdate, discType: t3.discType || t2.discType }
 
   } catch (err) {
     console.error('=== decideAndAnswer error:', err.message)
     return { shouldReply: false }
-  }
-}
-
-// ==============================
-// IMAGE GENERATION — Imagen 3
-// ==============================
-async function handleImageRequest(event, text, groupId) {
-  try {
-    await lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '🎨 จิ้นน้อยกำลังสร้างรูปให้นะคะ รอสักครู่ค่ะ...'
-    })
-
-    const prompt = text
-      .replace(/^สร้างรูป/i, '')
-      .replace(/^วาดรูป/i, '')
-      .replace(/^gen รูป/i, '')
-      .replace(/^image:/i, '')
-      .replace(/^รูปภาพ:/i, '')
-      .trim()
-
-    console.log('=== IMAGE PROMPT:', prompt)
-
-    const response = await fetch(IMAGEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        instances: [{
-          prompt: `${prompt}, professional product photography, clean background, high quality`
-        }],
-        parameters: {
-          sampleCount: 1,
-          aspectRatio: '1:1'
-        }
-      })
-    })
-
-    const data = await response.json()
-    console.log('=== IMAGEN RESPONSE:', JSON.stringify(data))
-
-    const base64Image = data?.predictions?.[0]?.bytesBase64Encoded
-    if (!base64Image) throw new Error('No image generated: ' + JSON.stringify(data?.error || ''))
-
-    // อัปโหลด base64 ขึ้น LINE
-    const imageBuffer = Buffer.from(base64Image, 'base64')
-
-    // บันทึกลง Supabase Storage แล้วได้ URL
-    const fileName = `images/${Date.now()}.png`
-    const { data: uploadData, error: uploadError } = await supabase
-      .storage
-      .from('generated-images')
-      .upload(fileName, imageBuffer, {
-        contentType: 'image/png',
-        upsert: false
-      })
-
-    if (uploadError) throw new Error('Upload error: ' + uploadError.message)
-
-    const { data: urlData } = supabase
-      .storage
-      .from('generated-images')
-      .getPublicUrl(fileName)
-
-    const imageUrl = urlData.publicUrl
-    console.log('=== IMAGE URL:', imageUrl)
-
-    // ส่งรูปเข้า LINE
-    await lineClient.pushMessage(groupId, {
-      type: 'image',
-      originalContentUrl: imageUrl,
-      previewImageUrl: imageUrl
-    })
-
-  } catch (err) {
-    console.error('=== IMAGE ERROR:', err.message)
-    await lineClient.pushMessage(groupId, {
-      type: 'text',
-      text: `❌ สร้างรูปไม่สำเร็จค่ะ\nError: ${err.message}\n\nลองใหม่นะคะ 🙏`
-    })
   }
 }
 
