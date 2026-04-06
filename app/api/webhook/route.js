@@ -365,7 +365,51 @@ function parseGeminiJson(rawText) {
   try { return JSON.parse(match[0]) } catch { return null }
 }
 
-// Tier 2 — Gemini + knowledge base เท่านั้น (ถูก เร็ว)
+// Tier 2A — ตัดสินใจก่อน (JSON เล็ก tokens น้อย ไม่ถูก cut)
+async function tier2Decide(question, groupId, userProfile, knowledgeText) {
+  const { userName, historyText, discInfo } = buildPromptContext(groupId, userProfile)
+
+  const response = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{
+          text: `${getPersonality()}
+
+## ข้อมูลจากทีมงาน:
+${knowledgeText}
+
+## ผู้ส่ง: ${userName}
+${discInfo}
+
+## บทสนทนาล่าสุด:
+${historyText || 'ยังไม่มี'}
+
+## ข้อความ: "${question}"
+
+ตัดสินใจโดยใช้กฎต่อไปนี้:
+- shouldReply true: ถามคำถาม / อยากรู้ข้อมูล / ทักทาย / mention จิ้นน้อย / แสดงความสนใจสินค้า/บริการ
+- shouldReply false: คุยกันเองในกลุ่ม / บอกเล่าสิ่งที่ทำ / ไม่ได้ต้องการคำตอบจากบอท
+- isHighRisk true: ถามเรื่องโรค/ยา/รักษาเฉพาะบุคคล หรือแสดงความไม่พอใจ
+- needsSearch true: ต้องการข้อมูล real-time ที่ KB ไม่มี (ราคาตลาด งานวิจัยใหม่ ข่าว)
+- discUpdate: เพิ่ม 0-2 ต่อ dimension จากสัญญาณในข้อความ
+
+ตอบ JSON เดียว ห้ามมีข้อความอื่น (reply ให้ว่างไว้ก่อน):
+{"shouldReply":true,"isHighRisk":false,"riskReason":"","reason":"","needsSearch":false,"discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null}`
+        }]
+      }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 200 }
+    })
+  })
+
+  const data = await response.json()
+  const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
+  console.log('=== TIER2 DECIDE RAW:', rawText)
+  return parseGeminiJson(rawText)
+}
+
+// Tier 2B — สร้าง reply จาก KB (เมื่อ shouldReply: true และ needsSearch: false)
 async function tier2Reply(question, groupId, userProfile, knowledgeText) {
   const { userName, historyText, discInfo } = buildPromptContext(groupId, userProfile)
 
@@ -388,27 +432,22 @@ ${historyText || 'ยังไม่มี'}
 
 ## ข้อความ: "${question}"
 
-## ตัดสินใจ:
-shouldReply: true ถ้าถามคำถาม / mention จิ้นน้อย / ทักทาย — false ถ้าคุยกันเอง/เล่าเรื่อง/บอกเล่า
-isHighRisk: true ถ้าถามโรค/ยา/รักษา หรือแสดงความไม่พอใจ
-needsSearch: true ถ้าคำถามต้องการข้อมูล real-time หรือ knowledge base ไม่มีคำตอบที่ชัดเจน (เช่น ราคาตลาด งานวิจัยใหม่ สถิติล่าสุด)
-discUpdate: เพิ่ม 0-2 ต่อ dimension จากสัญญาณในข้อความ
-
-ตอบ JSON เดียว ห้ามมีข้อความอื่น:
-{"shouldReply":true,"isHighRisk":false,"riskReason":"","reason":"","needsSearch":false,"discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null,"reply":""}`
+ตอบในสไตล์จิ้นน้อย ปรับตาม DISC ของผู้ส่ง ใช้ข้อมูลจากทีมงานเป็นหลัก
+ตอบแค่ข้อความ ไม่ต้อง JSON ไม่ต้อง prefix ใดๆ`
         }]
       }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 800 }
+      generationConfig: { temperature: 0.5, maxOutputTokens: 600 }
     })
   })
 
   const data = await response.json()
   const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
-  console.log('=== TIER2 RAW:', rawText)
-  return parseGeminiJson(rawText)
+  console.log('=== TIER2 REPLY RAW:', rawText)
+  return rawText?.trim() || ''
 }
 
 // Tier 3 — Gemini + google_search (แรง ใช้เฉพาะเมื่อ needsSearch: true)
+// ตอบแค่ข้อความ ไม่ใช่ JSON เพราะ google_search ทำให้ JSON พัง
 async function tier3Reply(question, groupId, userProfile) {
   const { userName, historyText, discInfo } = buildPromptContext(groupId, userProfile)
 
@@ -428,46 +467,48 @@ ${historyText || 'ยังไม่มี'}
 
 ## ข้อความ: "${question}"
 
-ค้นหาข้อมูลแล้วตอบในสไตล์จิ้นน้อย ตาม DISC ของผู้ส่ง
-isHighRisk: true ถ้าถามโรค/ยา/รักษา หรือแสดงความไม่พอใจ
-
-ตอบ JSON เดียว ห้ามมีข้อความอื่น:
-{"isHighRisk":false,"riskReason":"","discUpdate":{"d":0,"i":0,"s":0,"c":0},"discType":null,"reply":""}`
+ค้นหาข้อมูลล่าสุดแล้วตอบในสไตล์จิ้นน้อย ปรับตาม DISC ของผู้ส่ง
+ตอบแค่ข้อความ ไม่ต้อง JSON ไม่ต้อง prefix ใดๆ`
         }]
       }],
       tools: [{ google_search: {} }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 1200 }
+      generationConfig: { temperature: 0.5, maxOutputTokens: 800 }
     })
   })
 
   const data = await response.json()
   const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
   console.log('=== TIER3 RAW:', rawText)
-  return parseGeminiJson(rawText)
+  const reply = rawText?.trim()
+  return reply ? { reply } : null
 }
 
 async function decideAndAnswer(question, groupId, userProfile = {}) {
   try {
     const knowledgeText = await getKnowledge()
 
-    // Tier 2 — ถูกก่อน
-    const t2 = await tier2Reply(question, groupId, userProfile, knowledgeText)
-    console.log('=== TIER2 DECISION:', JSON.stringify(t2))
+    // Tier 2A — ตัดสินใจก่อน (JSON เล็กๆ ไม่โดน cut)
+    const decision = await tier2Decide(question, groupId, userProfile, knowledgeText)
+    console.log('=== TIER2 DECISION:', JSON.stringify(decision))
 
-    if (!t2) return { shouldReply: false }
+    if (!decision) return { shouldReply: false }
 
-    // ถ้า Tier 2 บอกว่าไม่ต้องตอบ หรือ high-risk — จบได้เลย
-    if (!t2.shouldReply || t2.isHighRisk) return { ...t2, shouldReply: t2.shouldReply }
-
-    // Tier 2 ตอบได้และไม่ต้อง search → ใช้เลย
-    if (!t2.needsSearch) return t2
+    // ไม่ต้องตอบ หรือ high-risk → จบ
+    if (!decision.shouldReply || decision.isHighRisk) return decision
 
     // Tier 3 — ต้องการ search
-    console.log('=== ESCALATE TO TIER3')
-    const t3 = await tier3Reply(question, groupId, userProfile)
-    if (!t3) return t2 // fallback ถ้า Tier 3 พัง
+    if (decision.needsSearch) {
+      console.log('=== ESCALATE TO TIER3')
+      const t3 = await tier3Reply(question, groupId, userProfile)
+      if (t3?.reply) {
+        return { ...decision, ...t3, shouldReply: true }
+      }
+      // Tier 3 พัง → fallthrough ไป Tier 2B
+    }
 
-    return { ...t3, shouldReply: true, discUpdate: t3.discUpdate || t2.discUpdate, discType: t3.discType || t2.discType }
+    // Tier 2B — สร้าง reply จาก KB
+    const reply = await tier2Reply(question, groupId, userProfile, knowledgeText)
+    return { ...decision, shouldReply: true, reply }
 
   } catch (err) {
     console.error('=== decideAndAnswer error:', err.message)
