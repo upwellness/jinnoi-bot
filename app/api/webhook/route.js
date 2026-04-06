@@ -472,7 +472,7 @@ ${historyText || 'ยังไม่มี'}
         }]
       }],
       tools: [{ google_search: {} }],
-      generationConfig: { temperature: 0.5, maxOutputTokens: 800 }
+      generationConfig: { temperature: 0.5, maxOutputTokens: 3000 }
     })
   })
 
