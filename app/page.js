@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 
 const FONT_URL = 'https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap'
 
@@ -668,7 +668,7 @@ export default function Dashboard() {
                               {d.status.toUpperCase()}
                             </span>
                             <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace' }}>
-                              #{d.id.slice(0, 8)} · {new Date(d.created_at).toLocaleString('th-TH')}
+                              #{String(d.id).slice(0, 8)} · {new Date(d.created_at).toLocaleString('th-TH')}
                             </span>
                           </div>
                           <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text)', marginBottom: d.status === 'pending' ? 12 : 0 }}>{d.content}</div>
@@ -705,7 +705,7 @@ export default function Dashboard() {
                         <tbody>
                           {knowledge.map(k => (
                             <tr key={k.id}>
-                              <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text3)' }}>#{k.id.slice(0, 8)}</td>
+                              <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text3)' }}>#{String(k.id).slice(0, 8)}</td>
                               <td style={{ fontSize: 13, lineHeight: 1.6 }}>{k.content.slice(0, 140)}{k.content.length > 140 ? '…' : ''}</td>
                               <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{new Date(k.created_at).toLocaleDateString('th-TH')}</td>
                               <td><button className="btn btn-danger btn-sm" onClick={() => deleteKnowledge(k.id)}>🗑</button></td>
