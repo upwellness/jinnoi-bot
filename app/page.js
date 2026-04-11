@@ -314,18 +314,26 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [approveModal, setApproveModal] = useState(null)
   const [editingNickname, setEditingNickname] = useState(null)
+  const [programs, setPrograms] = useState([])
+  const [groupPrograms, setGroupPrograms] = useState([])
+  const [selectedProgram, setSelectedProgram] = useState(null)
+  const [programDays, setProgramDays] = useState([])
+  const [editingDay, setEditingDay] = useState(null)
+  const [startProgramModal, setStartProgramModal] = useState(null)
 
   useEffect(() => { fetchAll() }, [])
 
   async function fetchAll() {
     setRefreshing(true)
-    const [d, k, g, pg, m, rq] = await Promise.all([
+    const [d, k, g, pg, m, rq, progs, gps] = await Promise.all([
       fetch('/api/admin?action=drafts').then(r => r.json()).catch(() => []),
       fetch('/api/admin?action=knowledge').then(r => r.json()).catch(() => []),
       fetch('/api/admin?action=groups').then(r => r.json()).catch(() => []),
       fetch('/api/admin?action=pending_groups').then(r => r.json()).catch(() => []),
       fetch('/api/admin?action=members').then(r => r.json()).catch(() => []),
       fetch('/api/admin?action=review_queue').then(r => r.json()).catch(() => []),
+      fetch('/api/admin?action=programs').then(r => r.json()).catch(() => []),
+      fetch('/api/admin?action=group_programs').then(r => r.json()).catch(() => []),
     ])
     setDrafts(d || [])
     setKnowledge(k || [])
@@ -333,7 +341,37 @@ export default function Dashboard() {
     setPendingGroups(pg || [])
     setMembers(m || [])
     setReviewQueue(rq || [])
+    setPrograms(progs || [])
+    setGroupPrograms(gps || [])
     setRefreshing(false)
+  }
+
+  async function loadProgramDays(programId) {
+    const data = await fetch(`/api/admin?action=program_days&program_id=${programId}`).then(r => r.json()).catch(() => [])
+    setProgramDays(data || [])
+  }
+
+  async function saveDayEdit(day) {
+    await post({ action: 'update_program_day', ...day })
+    setEditingDay(null)
+    loadProgramDays(day.program_id)
+    showToast('บันทึก Day ' + day.day_number + ' แล้ว')
+  }
+
+  async function startGroupProgram({ groupId, programId, startDate }) {
+    await post({ action: 'start_group_program', groupId, programId, startDate })
+    setStartProgramModal(null)
+    showToast('เริ่ม Program แล้ว')
+  }
+
+  async function toggleGroupProgram(id, paused) {
+    await post({ action: 'toggle_group_program', id, paused })
+    showToast(paused ? 'หยุด Program ชั่วคราว' : 'เปิด Program แล้ว', paused ? 'warn' : 'success')
+  }
+
+  async function stopGroupProgram(id) {
+    await post({ action: 'stop_group_program', id })
+    showToast('หยุด Program และลบออกแล้ว', 'danger')
   }
 
   function showToast(msg, type = 'success') {
@@ -400,6 +438,7 @@ export default function Dashboard() {
     { id: 'drafts', icon: '✦', label: 'Trainer Drafts', badge: pendingDrafts.length, badgeColor: 'amber', section: 'CONTENT' },
     { id: 'knowledge', icon: '◎', label: 'Knowledge Base', badge: knowledge.length, badgeColor: 'blue', section: null },
     { id: 'members', icon: '◉', label: 'Members & DISC', badge: members.length, badgeColor: 'blue', section: 'CONFIG' },
+    { id: 'programs', icon: '◷', label: 'Daily Programs', badge: groupPrograms.length, badgeColor: 'purple', section: 'PROGRAMS' },
   ]
 
   const pageInfo = {
@@ -409,6 +448,7 @@ export default function Dashboard() {
     knowledge: { title: 'Knowledge Base', sub: `${knowledge.length} รายการทั้งหมด` },
     groups: { title: 'Groups', sub: `${groups.length} กลุ่มที่ลงทะเบียน` },
     members: { title: 'Members & DISC', sub: `${members.length} สมาชิกในระบบ` },
+    programs: { title: 'Daily Programs', sub: `${programs.length} คอร์ส · ${groupPrograms.length} กลุ่ม active` },
   }
 
   let sectionShown = {}
@@ -847,12 +887,154 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* ===== PROGRAMS ===== */}
+            {page === 'programs' && (
+              <div className="anim-up">
+
+                {/* Active group programs */}
+                <div className="card" style={{ marginBottom: 20 }}>
+                  <div className="card-header" style={{ justifyContent: 'space-between' }}>
+                    <span><span style={{ color: 'var(--purple)' }}>◷</span> กลุ่มที่กำลังทำ Program</span>
+                    <button className="btn btn-primary btn-sm" onClick={() => setStartProgramModal({})}>+ เริ่ม Program ให้กลุ่ม</button>
+                  </div>
+                  {groupPrograms.length === 0
+                    ? <div className="empty-state"><div className="empty-icon">◷</div><div className="empty-title">ยังไม่มีกลุ่มทำ Program</div><div className="empty-sub">กด "+ เริ่ม Program" เพื่อ assign คอร์สให้กลุ่ม</div></div>
+                    : (
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>กลุ่ม</th>
+                            <th>คอร์ส</th>
+                            <th style={{ textAlign: 'center' }}>วันที่</th>
+                            <th>เริ่มวันที่</th>
+                            <th>สถานะ</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupPrograms.map(gp => {
+                            const startDate = new Date(gp.start_date)
+                            const today = new Date()
+                            const dayNum = Math.floor((today - startDate) / (1000 * 60 * 60 * 24)) + 1
+                            const progress = gp.program_duration ? Math.min(Math.round((dayNum / gp.program_duration) * 100), 100) : 0
+                            return (
+                              <tr key={gp.id}>
+                                <td style={{ fontWeight: 600, fontSize: 13 }}>{gp.group_name}</td>
+                                <td>
+                                  <div style={{ fontSize: 13 }}>{gp.program_name}</div>
+                                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{gp.program_duration} วัน</div>
+                                </td>
+                                <td style={{ textAlign: 'center' }}>
+                                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--teal)' }}>{dayNum}</div>
+                                  <div style={{ fontSize: 9, color: 'var(--text3)' }}>/ {gp.program_duration}</div>
+                                  <div style={{ marginTop: 4, height: 4, background: 'var(--bg3)', borderRadius: 4, overflow: 'hidden', width: 60, margin: '4px auto 0' }}>
+                                    <div style={{ height: '100%', width: `${progress}%`, background: 'var(--teal)', borderRadius: 4 }} />
+                                  </div>
+                                </td>
+                                <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text3)' }}>{new Date(gp.start_date).toLocaleDateString('th-TH')}</td>
+                                <td>
+                                  {gp.paused
+                                    ? <span className="chip chip-amber">PAUSED</span>
+                                    : <span className="chip chip-teal">ACTIVE</span>
+                                  }
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    <button className="btn btn-warn btn-sm" onClick={() => toggleGroupProgram(gp.id, !gp.paused)}>
+                                      {gp.paused ? '▶' : '⏸'}
+                                    </button>
+                                    <button className="btn btn-danger btn-sm" onClick={() => stopGroupProgram(gp.id)}>✕</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )
+                  }
+                </div>
+
+                {/* Program list + day editor */}
+                <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
+                  <div className="card" style={{ height: 'fit-content' }}>
+                    <div className="card-header"><span style={{ color: 'var(--purple)' }}>◎</span> คอร์สทั้งหมด</div>
+                    {programs.map(p => (
+                      <div
+                        key={p.id}
+                        onClick={() => { setSelectedProgram(p); loadProgramDays(p.id); setEditingDay(null) }}
+                        style={{
+                          padding: '13px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                          background: selectedProgram?.id === p.id ? 'var(--purple-dim)' : 'transparent',
+                          transition: 'background 0.1s'
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: 13, color: selectedProgram?.id === p.id ? 'var(--purple)' : 'var(--text)' }}>{p.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>{p.duration_days} วัน · {p.type}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    {!selectedProgram
+                      ? <div className="empty-state"><div className="empty-icon">◎</div><div className="empty-title">เลือกคอร์สเพื่อดู/แก้ไข content รายวัน</div></div>
+                      : (
+                        <>
+                          <div className="card-header">
+                            <span style={{ color: 'var(--purple)' }}>◷</span>
+                            {selectedProgram.name} — Day Editor
+                            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{programDays.length} วัน</span>
+                          </div>
+                          <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+                            {programDays.length === 0
+                              ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">ไม่พบข้อมูลรายวัน</div></div>
+                              : programDays.map(day => (
+                                <div key={day.id} style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+                                  {editingDay?.id === day.id
+                                    ? <DayEditor day={editingDay} onChange={setEditingDay} onSave={() => saveDayEdit(editingDay)} onCancel={() => setEditingDay(null)} />
+                                    : (
+                                      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                                        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, color: 'var(--purple)', minWidth: 36, paddingTop: 2 }}>D{day.day_number}</div>
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>
+                                            🌅 {day.meal_morning?.slice(0, 60)}{day.meal_morning?.length > 60 ? '…' : ''}
+                                          </div>
+                                          <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                                            ☀️ {day.meal_afternoon?.slice(0, 60)}{day.meal_afternoon?.length > 60 ? '…' : ''}
+                                          </div>
+                                        </div>
+                                        <button className="btn btn-ghost btn-sm" onClick={() => setEditingDay({ ...day })}>✎</button>
+                                      </div>
+                                    )
+                                  }
+                                </div>
+                              ))
+                            }
+                          </div>
+                        </>
+                      )
+                    }
+                  </div>
+                </div>
+              </div>
+            )}
+
           </div>
         </main>
       </div>
 
       {/* APPROVE MODAL */}
       {approveModal && <ApproveModal group={approveModal} onApprove={approveGroup} onClose={() => setApproveModal(null)} />}
+
+      {/* START PROGRAM MODAL */}
+      {startProgramModal && (
+        <StartProgramModal
+          groups={groups}
+          programs={programs}
+          onStart={startGroupProgram}
+          onClose={() => setStartProgramModal(null)}
+        />
+      )}
 
       {/* TOASTS */}
       <div className="toast-container">
@@ -864,6 +1046,90 @@ export default function Dashboard() {
         ))}
       </div>
     </>
+  )
+}
+
+function DayEditor({ day, onChange, onSave, onCancel }) {
+  const fields = [
+    { key: 'meal_morning', label: '🌅 อาหารเช้า' },
+    { key: 'meal_afternoon', label: '☀️ อาหารกลางวัน' },
+    { key: 'meal_evening', label: '🌙 อาหารเย็น' },
+    { key: 'supplement', label: '💊 ผลิตภัณฑ์เสริม' },
+    { key: 'trick_morning', label: '💡 เทคนิคเช้า' },
+    { key: 'trick_afternoon', label: '💡 เทคนิคเที่ยง' },
+    { key: 'trick_evening', label: '💡 เทคนิคเย็น' },
+    { key: 'content_keyword', label: '🏷 Keyword วันนี้' },
+  ]
+  return (
+    <div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: 'var(--purple)', marginBottom: 14 }}>
+        Day {day.day_number}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+        {fields.map(f => (
+          <div key={f.key}>
+            <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4, fontFamily: 'var(--font-display)', letterSpacing: '0.05em' }}>{f.label}</div>
+            <textarea
+              className="input"
+              style={{ width: '100%', resize: 'vertical', minHeight: 60, fontSize: 12, lineHeight: 1.5 }}
+              value={day[f.key] || ''}
+              onChange={e => onChange({ ...day, [f.key]: e.target.value })}
+            />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-primary btn-sm" onClick={onSave}>✓ บันทึก</button>
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>ยกเลิก</button>
+      </div>
+    </div>
+  )
+}
+
+function StartProgramModal({ groups, programs, onStart, onClose }) {
+  const [groupId, setGroupId] = useState('')
+  const [programId, setProgramId] = useState('')
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0])
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div style={{ padding: '20px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-display)' }}>เริ่ม Daily Program</div>
+          <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 22, lineHeight: 1 }} onClick={onClose}>×</span>
+        </div>
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text2)', fontFamily: 'var(--font-display)', letterSpacing: '0.06em', marginBottom: 8 }}>เลือกกลุ่ม</div>
+            <select className="input" style={{ width: '100%' }} value={groupId} onChange={e => setGroupId(e.target.value)}>
+              <option value="">— เลือกกลุ่ม —</option>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text2)', fontFamily: 'var(--font-display)', letterSpacing: '0.06em', marginBottom: 8 }}>เลือกคอร์ส</div>
+            <select className="input" style={{ width: '100%' }} value={programId} onChange={e => setProgramId(e.target.value)}>
+              <option value="">— เลือกคอร์ส —</option>
+              {programs.map(p => <option key={p.id} value={p.id}>{p.name} ({p.duration_days} วัน)</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text2)', fontFamily: 'var(--font-display)', letterSpacing: '0.06em', marginBottom: 8 }}>วันเริ่มต้น</div>
+            <input className="input" style={{ width: '100%' }} type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button className="btn btn-ghost" onClick={onClose}>ยกเลิก</button>
+            <button
+              className="btn btn-primary"
+              disabled={!groupId || !programId || !startDate}
+              onClick={() => onStart({ groupId, programId, startDate })}
+            >
+              ✓ เริ่ม Program
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 

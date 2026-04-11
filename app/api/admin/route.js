@@ -58,6 +58,49 @@ export async function GET(req) {
       const result = (profiles || []).map(p => ({ ...p, group_name: groupMap[p.group_id] || p.group_id }))
       return NextResponse.json(result)
     }
+    if (action === 'programs') {
+      const { data } = await supabase
+        .from('programs')
+        .select('*')
+        .order('created_at', { ascending: true })
+      return NextResponse.json(data || [])
+    }
+    if (action === 'program_days') {
+      const programId = searchParams.get('program_id')
+      if (!programId) return NextResponse.json({ error: 'program_id required' }, { status: 400 })
+      const { data } = await supabase
+        .from('program_days')
+        .select('*')
+        .eq('program_id', programId)
+        .order('day_number', { ascending: true })
+      return NextResponse.json(data || [])
+    }
+    if (action === 'group_programs') {
+      const { data: gps } = await supabase
+        .from('group_programs')
+        .select('*, programs(name, duration_days, type)')
+        .order('created_at', { ascending: false })
+      const { data: groups } = await supabase.from('groups').select('id, name')
+      const groupMap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
+      const result = (gps || []).map(gp => ({
+        ...gp,
+        group_name: groupMap[gp.group_id] || gp.group_id,
+        program_name: gp.programs?.name,
+        program_duration: gp.programs?.duration_days,
+        program_type: gp.programs?.type
+      }))
+      return NextResponse.json(result)
+    }
+    if (action === 'send_log') {
+      const gpId = searchParams.get('group_program_id')
+      if (!gpId) return NextResponse.json({ error: 'group_program_id required' }, { status: 400 })
+      const { data } = await supabase
+        .from('daily_send_log')
+        .select('*')
+        .eq('group_program_id', gpId)
+        .order('day_number', { ascending: true })
+      return NextResponse.json(data || [])
+    }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
   } catch (err) {
@@ -109,13 +152,39 @@ export async function POST(req) {
   return NextResponse.json({ ok: true })
 }
 
-if (body.action === 'reject_review') {
-  await supabase.from('review_queue')
-    .update({ status: 'rejected' })
-    .eq('id', body.id)
-  return NextResponse.json({ ok: true })
-}
-
+    if (body.action === 'reject_review') {
+      await supabase.from('review_queue')
+        .update({ status: 'rejected' })
+        .eq('id', body.id)
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'update_program_day') {
+      const { id, ...fields } = body
+      delete fields.action
+      await supabase.from('program_days').update(fields).eq('id', id)
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'start_group_program') {
+      // Upsert group_program: one active program per group
+      await supabase.from('group_programs').upsert({
+        group_id: body.groupId,
+        program_id: body.programId,
+        start_date: body.startDate || new Date().toISOString().split('T')[0],
+        current_day: 1,
+        paused: false
+      }, { onConflict: 'group_id' })
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'toggle_group_program') {
+      await supabase.from('group_programs')
+        .update({ paused: body.paused })
+        .eq('id', body.id)
+      return NextResponse.json({ ok: true })
+    }
+    if (body.action === 'stop_group_program') {
+      await supabase.from('group_programs').delete().eq('id', body.id)
+      return NextResponse.json({ ok: true })
+    }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 
   } catch (err) {
