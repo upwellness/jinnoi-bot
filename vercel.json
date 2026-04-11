@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/daily?time=morning",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/daily?time=afternoon",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/daily?time=evening",
+      "schedule": "0 11 * * *"
+    }
+  ]
+}
