@@ -20,7 +20,7 @@ end $$;
 -- program_days: เนื้อหาแต่ละวันของแต่ละคอร์ส (admin config ได้)
 create table if not exists program_days (
   id            serial primary key,
-  program_id    uuid not null,                    -- references programs(id)
+  program_id    bigint not null,                  -- references programs(id)
   day_number    int not null,
   -- อาหาร/ยา (keyword หรือ full text — AI จะ expand)
   meal_morning  text not null default '',         -- เมนูเช้า
@@ -43,7 +43,7 @@ create table if not exists program_days (
 create table if not exists group_programs (
   id          uuid primary key default gen_random_uuid(),
   group_id    text not null unique,                -- LINE group id (1 กลุ่มต่อ 1 program)
-  program_id  uuid not null,                      -- references programs(id)
+  program_id  bigint not null,                    -- references programs(id)
   start_date  date not null,
   current_day int not null default 1,
   paused      boolean not null default false,
@@ -72,9 +72,9 @@ create index if not exists daily_send_log_lookup on daily_send_log (group_progra
 
 do $$
 declare
-  pid_uplabs    uuid;
-  pid_full30    uuid;
-  pid_full60    uuid;
+  pid_uplabs    bigint;
+  pid_full30    bigint;
+  pid_full60    bigint;
 begin
 
   -- Upsert programs
