@@ -9,7 +9,13 @@ alter table programs add column if not exists type text not null default 'uplabs
 alter table programs add column if not exists description text default '';
 
 -- เพิ่ม unique constraint บน name เพื่อให้ ON CONFLICT (name) ทำงานได้
-alter table programs add constraint if not exists programs_name_unique unique (name);
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'programs_name_unique'
+  ) then
+    alter table programs add constraint programs_name_unique unique (name);
+  end if;
+end $$;
 
 -- program_days: เนื้อหาแต่ละวันของแต่ละคอร์ส (admin config ได้)
 create table if not exists program_days (
