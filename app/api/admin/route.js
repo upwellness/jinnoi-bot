@@ -165,14 +165,17 @@ export async function POST(req) {
       return NextResponse.json({ ok: true })
     }
     if (body.action === 'start_group_program') {
-      // Upsert group_program: one active program per group
-      await supabase.from('group_programs').upsert({
+      const { error } = await supabase.from('group_programs').upsert({
         group_id: body.groupId,
-        program_id: body.programId,
+        program_id: parseInt(body.programId, 10),
         start_date: body.startDate || new Date().toISOString().split('T')[0],
         current_day: 1,
         paused: false
       }, { onConflict: 'group_id' })
+      if (error) {
+        console.error('start_group_program error:', error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
       return NextResponse.json({ ok: true })
     }
     if (body.action === 'toggle_group_program') {
