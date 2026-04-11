@@ -8,6 +8,9 @@ alter table programs add column if not exists duration_days int not null default
 alter table programs add column if not exists type text not null default 'uplabs';
 alter table programs add column if not exists description text default '';
 
+-- เพิ่ม unique constraint บน name เพื่อให้ ON CONFLICT (name) ทำงานได้
+alter table programs add constraint if not exists programs_name_unique unique (name);
+
 -- program_days: เนื้อหาแต่ละวันของแต่ละคอร์ส (admin config ได้)
 create table if not exists program_days (
   id            serial primary key,
