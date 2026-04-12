@@ -233,7 +233,7 @@ export async function GET(req) {
 
     const sent = results.filter(r => r.ok).length
     console.log(`[CRON ${time}] processed ${groupPrograms.length} programs, sent ${sent}`)
-    return NextResponse.json({ ok: true, time, sent, results, debug_group_programs: groupPrograms.map(g => g.group_id), debug_supabase_url: process.env.SUPABASE_URL?.slice(0, 40) })
+    return NextResponse.json({ ok: true, time, sent, results, debug_group_programs: groupPrograms.map(g => ({ id: g.id, group_id: g.group_id, paused: g.paused })), debug_supabase_url: process.env.SUPABASE_URL?.slice(0, 40) })
 
   } catch (err) {
     console.error('[CRON] crash:', err.message)
