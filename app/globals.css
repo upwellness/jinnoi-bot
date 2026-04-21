@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", "Noto Sans Thai Looped", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-surface: hsl(0 0% 100%);
+  --color-surface-1: hsl(220 20% 98%);
+  --color-surface-2: hsl(220 16% 96%);
+  --color-surface-3: hsl(220 14% 93%);
+  --color-border: hsl(220 13% 88%);
+  --color-border-strong: hsl(220 13% 80%);
+  --color-fg: hsl(222 32% 12%);
+  --color-fg-muted: hsl(220 10% 42%);
+  --color-fg-subtle: hsl(220 8% 60%);
+
+  --color-brand: hsl(172 82% 35%);
+  --color-brand-fg: hsl(0 0% 100%);
+  --color-brand-soft: hsl(172 60% 94%);
+  --color-accent: hsl(217 91% 55%);
+  --color-accent-soft: hsl(217 91% 95%);
+
+  --color-success: hsl(150 60% 36%);
+  --color-success-soft: hsl(150 60% 94%);
+  --color-warning: hsl(35 90% 48%);
+  --color-warning-soft: hsl(38 100% 94%);
+  --color-danger: hsl(352 78% 52%);
+  --color-danger-soft: hsl(352 80% 96%);
+  --color-info: hsl(217 91% 55%);
+  --color-info-soft: hsl(217 91% 95%);
+  --color-violet: hsl(265 82% 60%);
+  --color-violet-soft: hsl(265 82% 96%);
+}
+
+.dark {
+  --color-surface: hsl(222 28% 8%);
+  --color-surface-1: hsl(222 24% 11%);
+  --color-surface-2: hsl(222 22% 14%);
+  --color-surface-3: hsl(222 18% 18%);
+  --color-border: hsl(222 15% 22%);
+  --color-border-strong: hsl(222 14% 30%);
+  --color-fg: hsl(220 25% 94%);
+  --color-fg-muted: hsl(220 12% 68%);
+  --color-fg-subtle: hsl(220 10% 48%);
+
+  --color-brand: hsl(172 82% 48%);
+  --color-brand-fg: hsl(222 32% 8%);
+  --color-brand-soft: hsl(172 60% 15%);
+  --color-accent: hsl(217 91% 65%);
+  --color-accent-soft: hsl(217 60% 18%);
+
+  --color-success: hsl(150 60% 52%);
+  --color-success-soft: hsl(150 40% 14%);
+  --color-warning: hsl(38 92% 60%);
+  --color-warning-soft: hsl(38 60% 16%);
+  --color-danger: hsl(352 78% 62%);
+  --color-danger-soft: hsl(352 50% 18%);
+  --color-info: hsl(217 91% 65%);
+  --color-info-soft: hsl(217 60% 18%);
+  --color-violet: hsl(265 82% 70%);
+  --color-violet-soft: hsl(265 40% 20%);
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+    line-height: 1.6;
+  }
+  ::selection { background: var(--color-brand-soft); color: var(--color-fg); }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 999px;
+    border: 2px solid var(--color-surface);
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); }
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-up { animation: fade-up 0.3s ease both; }
+
+  @keyframes shimmer { to { background-position: 200% 0; } }
+
+  @keyframes spin-slow { to { transform: rotate(360deg); } }
+  .animate-spin-slow { animation: spin-slow 1s linear infinite; }
+}
