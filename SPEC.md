@@ -80,7 +80,15 @@
 4. Admin → Review Queue → อ่าน suggested_reply → แก้ไข (ถ้าต้องการ) → Approve → bot push คำตอบเข้ากลุ่ม
    - ⚠️ **Gap**: UI ปัจจุบันไม่มีช่องแก้ `suggested_reply` ก่อน approve — approve = push ข้อความเดิม (ดู §10)
 
-### 3.5 Customer cycle ใน program
+### 3.5 Customer วิเคราะห์อาหารจากภาพ
+1. Customer พิมพ์ `วิเคราะห์อาหาร` ใน group
+2. Bot reply: "📸 ส่งรูปอาหารมาได้เลยค่ะ (ภายใน 5 นาที)"
+3. Customer ส่งรูปอาหาร
+4. Bot reply ทันที: "🔍 กำลังวิเคราะห์..."
+5. Bot push ผลวิเคราะห์: เมนู + Kcal รวม + Protein/Carb/Fat (g + %) + ข้อสังเกต
+6. ถ้าภาพไม่ใช่อาหาร → bot ขอให้ส่งภาพใหม่
+
+### 3.6 Customer cycle ใน program
 - Day 1 07:00 → bot ทัก "@ชื่อ" ทุกคน พร้อม meal plan + เทคนิค
 - Day 1 12:00 → บอกเมนูกลางวัน + trick
 - Day 1 18:00 → บอกเมนูเย็น + trick
@@ -158,6 +166,17 @@
 - **FR-10.2** Refresh manual ด้วยปุ่ม ⟳
 - **FR-10.3** Toast notification 3.5s ทุก action
 - **FR-10.4** ⚠️ **Gap**: **ไม่มี auth** — ใครรู้ URL ก็เข้าได้ ต้องเพิ่ม basic auth / NextAuth
+
+### FR-11 Food image analysis
+- **FR-11.1** Trigger 2 ขั้น: user พิมพ์ `วิเคราะห์อาหาร` (หรือ `วิเคราะห์เมนู` / `analyze food`) แล้วส่ง **รูป** ตามมาภายใน 5 นาที
+- **FR-11.2** State tracking ใช้ `messages` table (ไม่ใช่ in-memory) — query ข้อความล่าสุดของ user คนนั้นใน group นั้น
+- **FR-11.3** ทำงานเฉพาะกลุ่มที่ approved แล้ว (ทั้ง customer + trainer)
+- **FR-11.4** ดึงรูปผ่าน LINE API `api-data.line.me/v2/bot/message/{id}/content` → encode base64 → ส่งให้ Gemini multimodal
+- **FR-11.5** Gemini return JSON: `{is_food, food_name, kcal_total, protein_g/pct, carb_g/pct, fat_g/pct, note}` — ใช้สูตร 4/4/9 Kcal/g
+- **FR-11.6** ถ้า `is_food:false` → reply ขอภาพอาหารใหม่; ถ้า fail → reply error
+- **FR-11.7** Reply ใช้ `pushMessage` (เพราะ replyToken ใช้ไปกับข้อความ "กำลังวิเคราะห์" แล้ว)
+- **FR-11.8** ⚠️ **Decision needed**: นับเป็น signal สำหรับ DISC ไหม? (ปัจจุบันไม่นับ)
+- **FR-11.9** ⚠️ **Decision needed**: เก็บผลวิเคราะห์เป็น log ต่างหาก (food_log table) เพื่อ track progress ของลูกค้าไหม?
 
 ---
 

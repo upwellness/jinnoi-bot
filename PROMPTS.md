@@ -286,7 +286,58 @@ JSON array → parse ด้วย regex `\[[\s\S]*\]` → insert ทุกข้
 
 ---
 
-## 11. Model Summary
+## 11. Food Image Analysis Prompt
+
+**ฟังก์ชัน**: `analyzeFoodImage()` ใน [webhook/route.js](app/api/webhook/route.js) · model `gemini-2.5-flash` · `temperature: 0.2` · `maxOutputTokens: 1024` · `thinkingConfig: { thinkingBudget: 0 }` · multimodal (`inline_data` + text)
+
+**Trigger**: user ต้องพิมพ์ข้อความ match regex `/^(วิเคราะห์อาหาร|วิเคราะห์เมนู|analyze food)\s*$/i` ก่อนส่งภาพภายใน 5 นาที
+
+```
+คุณคือ จิ้นน้อย โค้ชด้านสุขภาพและลดน้ำหนักของ UP Labs
+
+ภารกิจ: วิเคราะห์อาหารในภาพและประมาณค่าทางโภชนาการ
+
+ข้อกำหนดการคำนวณ:
+- Protein 4 Kcal/g, Carbohydrate 4 Kcal/g, Fat 9 Kcal/g
+- pct ของแต่ละ macro = (กรัม × Kcal/g) / kcal_total × 100
+- ผลรวม protein_pct + carb_pct + fat_pct ต้องประมาณ 100 (±2)
+- ตัวเลขกรัมและ Kcal ปัดเป็นจำนวนเต็ม
+
+ถ้าในภาพไม่ใช่อาหาร หรือมองไม่เห็นชัด:
+{"is_food": false, "reason": "เหตุผลสั้นๆ"}
+
+ถ้าเป็นอาหาร ให้ตอบ JSON เดียว ห้ามมีข้อความอื่น:
+{
+  "is_food": true,
+  "food_name": "ชื่อเมนูภาษาไทย",
+  "kcal_total": 0,
+  "protein_g": 0, "protein_pct": 0,
+  "carb_g": 0, "carb_pct": 0,
+  "fat_g": 0, "fat_pct": 0,
+  "note": "ข้อสังเกตสั้นๆ เช่น สัดส่วนคาร์บสูง ควรเสริมโปรตีน"
+}
+```
+
+### Reply format (`formatFoodReply`)
+```
+🍽 {nickname} ค่ะ จิ้นน้อยวิเคราะห์ให้แล้ว
+
+📌 เมนู: {food_name}
+🔥 พลังงานรวม: ~{kcal_total} Kcal
+
+📊 สัดส่วนสารอาหาร
+🥩 Protein  {pct}%  ({g} g)
+🍚 Carb     {pct}%  ({g} g)
+🥑 Fat      {pct}%  ({g} g)
+
+💡 {note ถ้ามี}
+
+* เป็นการประมาณการจากภาพเท่านั้นนะคะ
+```
+
+---
+
+## 12. Model Summary
 
 | Call site | Model | Temp | Max tokens | Tools | Thinking |
 |---|---|---|---|---|---|
@@ -297,5 +348,6 @@ JSON array → parse ด้วย regex `\[[\s\S]*\]` → insert ทุกข้
 | Research (standalone) | **gemini-2.0-flash** | 0.3 | 2000 | google_search | — |
 | Daily morning | gemini-2.5-flash | 0.7 | 2048 | — | `thinkingBudget: 0` |
 | Daily afternoon/evening | gemini-2.5-flash | 0.7 | 2048 | — | `thinkingBudget: 0` |
+| Food image analysis | gemini-2.5-flash | 0.2 | 1024 | inline_data (image) | `thinkingBudget: 0` |
 
 > **Inconsistency**: standalone research ใช้ model เก่า (2.0) — ตั้งใจ หรือ leftover? (ดู SPEC.md §10)

@@ -149,6 +149,171 @@ async function updateUserDisc(profile, discUpdate, discType) {
     .eq('id', profile.id)
 }
 
+// ==============================
+// FOOD ANALYSIS
+// ==============================
+const FOOD_TRIGGER_RE = /^(วิเคราะห์อาหาร|วิเคราะห์เมนู|analyze food)\s*$/i
+const FOOD_TRIGGER_TTL_MS = 5 * 60 * 1000
+
+async function handleImageMessage(event, groupId, userId) {
+  // เฉพาะกลุ่มที่ approved แล้ว — กันคนนอกใช้ฟีเจอร์นี้
+  const { data: group } = await supabase
+    .from('groups')
+    .select('id')
+    .eq('id', groupId)
+    .single()
+  if (!group) return
+
+  // ดูว่า user เพิ่งพิมพ์ "วิเคราะห์อาหาร" ภายใน 5 นาทีไหม
+  const since = new Date(Date.now() - FOOD_TRIGGER_TTL_MS).toISOString()
+  const { data: lastMsgs } = await supabase
+    .from('messages')
+    .select('content, created_at')
+    .eq('group_id', groupId)
+    .eq('line_user_id', userId)
+    .eq('direction', 'in')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  const triggered = lastMsgs?.[0] && FOOD_TRIGGER_RE.test((lastMsgs[0].content || '').trim())
+
+  // log image message (หลัง trigger detection เพื่อไม่ทับ trigger text)
+  await supabase.from('messages').insert({
+    group_id: groupId,
+    line_user_id: userId,
+    content: triggered ? '[image: food analysis]' : '[image]',
+    direction: 'in'
+  })
+
+  if (!triggered) return
+
+  // reply ทันทีว่ากำลังวิเคราะห์ (LINE timeout 1 นาที สำหรับ reply token)
+  await lineClient.replyMessage(event.replyToken, {
+    type: 'text',
+    text: '🔍 จิ้นน้อยกำลังวิเคราะห์ภาพอาหาร รอสักครู่ค่ะ...'
+  })
+
+  try {
+    const userProfile = await getOrCreateUserProfile(groupId, userId)
+    const { base64, mimeType } = await fetchLineImage(event.message.id)
+    const analysis = await analyzeFoodImage(base64, mimeType)
+
+    if (!analysis) {
+      await lineClient.pushMessage(groupId, {
+        type: 'text',
+        text: '❌ จิ้นน้อยวิเคราะห์ภาพไม่สำเร็จค่ะ ลองส่งใหม่อีกครั้งนะคะ 🙏'
+      })
+      return
+    }
+
+    if (analysis.is_food === false) {
+      await lineClient.pushMessage(groupId, {
+        type: 'text',
+        text: `🙏 จิ้นน้อยไม่เห็นอาหารในภาพนี้นะคะ${analysis.reason ? `\n(${analysis.reason})` : ''}\n\nลองส่งภาพอาหารชัดๆ มาใหม่ได้เลยค่ะ 📸`
+      })
+      return
+    }
+
+    const reply = formatFoodReply(analysis, userProfile)
+    await lineClient.pushMessage(groupId, { type: 'text', text: reply })
+
+    await supabase.from('messages').insert({
+      group_id: groupId,
+      line_user_id: 'bot',
+      content: reply,
+      direction: 'out'
+    })
+  } catch (err) {
+    console.error('=== FOOD ANALYSIS ERROR:', err.message)
+    await lineClient.pushMessage(groupId, {
+      type: 'text',
+      text: `❌ เกิดข้อผิดพลาดค่ะ: ${err.message}\n\nลองใหม่อีกครั้งนะคะ 🙏`
+    })
+  }
+}
+
+async function fetchLineImage(messageId) {
+  const res = await fetch(
+    `https://api-data.line.me/v2/bot/message/${messageId}/content`,
+    { headers: { Authorization: `Bearer ${process.env.LINE_ACCESS_TOKEN}` } }
+  )
+  if (!res.ok) throw new Error(`LINE image fetch failed: ${res.status}`)
+  const buffer = await res.arrayBuffer()
+  const base64 = Buffer.from(buffer).toString('base64')
+  const mimeType = res.headers.get('content-type') || 'image/jpeg'
+  return { base64, mimeType }
+}
+
+async function analyzeFoodImage(base64, mimeType) {
+  const prompt = `คุณคือ จิ้นน้อย โค้ชด้านสุขภาพและลดน้ำหนักของ UP Labs
+
+ภารกิจ: วิเคราะห์อาหารในภาพและประมาณค่าทางโภชนาการ
+
+ข้อกำหนดการคำนวณ:
+- Protein 4 Kcal/g, Carbohydrate 4 Kcal/g, Fat 9 Kcal/g
+- pct ของแต่ละ macro = (กรัม × Kcal/g) / kcal_total × 100
+- ผลรวม protein_pct + carb_pct + fat_pct ต้องประมาณ 100 (±2)
+- ตัวเลขกรัมและ Kcal ปัดเป็นจำนวนเต็ม
+
+ถ้าในภาพไม่ใช่อาหาร หรือมองไม่เห็นชัด:
+{"is_food": false, "reason": "เหตุผลสั้นๆ"}
+
+ถ้าเป็นอาหาร ให้ตอบ JSON เดียว ห้ามมีข้อความอื่น:
+{
+  "is_food": true,
+  "food_name": "ชื่อเมนูภาษาไทย",
+  "kcal_total": 0,
+  "protein_g": 0, "protein_pct": 0,
+  "carb_g": 0, "carb_pct": 0,
+  "fat_g": 0, "fat_pct": 0,
+  "note": "ข้อสังเกตสั้นๆ เช่น สัดส่วนคาร์บสูง ควรเสริมโปรตีน"
+}`
+
+  const response = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mimeType, data: base64 } },
+          { text: prompt }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    })
+  })
+
+  const data = await response.json()
+  const rawText = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('')
+  console.log('=== FOOD ANALYSIS RAW:', rawText)
+  return parseGeminiJson(rawText)
+}
+
+function formatFoodReply(a, userProfile) {
+  const name = userProfile?.nickname || userProfile?.display_name || 'คุณ'
+  const lines = [
+    `🍽 ${name} ค่ะ จิ้นน้อยวิเคราะห์ให้แล้ว`,
+    '',
+    `📌 เมนู: ${a.food_name || 'ไม่ระบุ'}`,
+    `🔥 พลังงานรวม: ~${a.kcal_total} Kcal`,
+    '',
+    '📊 สัดส่วนสารอาหาร',
+    `🥩 Protein  ${a.protein_pct}%  (${a.protein_g} g)`,
+    `🍚 Carb     ${a.carb_pct}%  (${a.carb_g} g)`,
+    `🥑 Fat      ${a.fat_pct}%  (${a.fat_g} g)`,
+  ]
+  if (a.note) {
+    lines.push('', `💡 ${a.note}`)
+  }
+  lines.push('', '* เป็นการประมาณการจากภาพเท่านั้นนะคะ')
+  return lines.join('\n')
+}
+
 export async function POST(req) {
   try {
     const body = await req.text()
@@ -162,13 +327,21 @@ export async function POST(req) {
     console.log('=== WEBHOOK events:', events?.length)
 
     for (const event of events) {
-      if (event.type !== 'message' || event.message.type !== 'text') continue
+      if (event.type !== 'message') continue
       if (!event.source.groupId) continue
 
       const groupId = event.source.groupId
       const userId = event.source.userId
-      const text = event.message.text.trim()
 
+      // === IMAGE BRANCH ===
+      if (event.message.type === 'image') {
+        await handleImageMessage(event, groupId, userId)
+        continue
+      }
+
+      if (event.message.type !== 'text') continue
+
+      const text = event.message.text.trim()
       console.log('=== MESSAGE:', groupId, text)
 
       await supabase.from('messages').insert({
@@ -177,6 +350,15 @@ export async function POST(req) {
         content: text,
         direction: 'in'
       })
+
+      // === FOOD ANALYSIS TRIGGER (intercept ก่อน routing ปกติ) ===
+      if (FOOD_TRIGGER_RE.test(text)) {
+        await lineClient.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '📸 ส่งรูปอาหารมาได้เลยค่ะ\nจิ้นน้อยจะวิเคราะห์ Kcal และสารอาหารให้\n\n(ส่งรูปภายใน 5 นาทีนะคะ)'
+        })
+        continue
+      }
 
       const { data: group } = await supabase
         .from('groups')

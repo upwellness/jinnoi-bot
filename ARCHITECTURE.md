@@ -26,15 +26,18 @@
 
 ## 2. Webhook — Group Dispatch
 
-`POST /api/webhook` ([webhook/route.js:152](app/api/webhook/route.js#L152)):
+`POST /api/webhook` ([webhook/route.js](app/api/webhook/route.js)):
 
 1. Validate signature ด้วย `LINE_CHANNEL_SECRET`
-2. วน events — ข้ามถ้าไม่ใช่ `message.text` หรือไม่มี `groupId`
-3. Log ข้อความทุกอันลง `messages` (direction:`in`)
-4. Query `groups` ด้วย `groupId`:
-   - ไม่เจอ → `handleUnknownGroup` (สร้าง `pending_groups` entry)
-   - type=`trainer` → `handleTrainer`
-   - type=`customer` → `handleCustomer`
+2. วน events — ข้ามถ้าไม่ใช่ `message` หรือไม่มี `groupId`
+3. **Image branch**: ถ้า `message.type === 'image'` → `handleImageMessage` (ดู §3.5)
+4. **Text branch** (ต่อจาก message.type === 'text'):
+   - Log ข้อความลง `messages` (direction:`in`)
+   - **Food trigger intercept**: ถ้า text match `/^(วิเคราะห์อาหาร|วิเคราะห์เมนู|analyze food)\s*$/i` → reply "ส่งรูปมาได้เลย" + skip routing
+   - Query `groups` ด้วย `groupId`:
+     - ไม่เจอ → `handleUnknownGroup` (สร้าง `pending_groups` entry)
+     - type=`trainer` → `handleTrainer`
+     - type=`customer` → `handleCustomer`
 
 ### 2.1 handleUnknownGroup
 - Dedupe ด้วย `group_id` ใน `pending_groups`
@@ -73,6 +76,23 @@
 
 ### Parser `parseGeminiJson`
 - Strip markdown fences ``` → regex `\{[\s\S]*\}` → `JSON.parse` กับ try/catch
+
+---
+
+## 3.5 Food Image Analysis (`handleImageMessage`)
+
+1. Check group exists ใน `groups` (skip ถ้าไม่ approved)
+2. Query `messages` ของ user คนนี้ใน group นี้ ภายใน 5 นาที, `direction:'in'`, order desc, limit 1
+3. ถ้า content ตรงกับ food trigger regex → `triggered = true`
+4. Insert `messages` row (`'[image: food analysis]'` หรือ `'[image]'`)
+5. ถ้าไม่ trigger → return เงียบ
+6. Reply ทันที "🔍 กำลังวิเคราะห์..." (ใช้ replyToken)
+7. `getOrCreateUserProfile` (สำหรับ `nickname`)
+8. `fetchLineImage(messageId)` → GET `api-data.line.me/v2/bot/message/{id}/content` → arrayBuffer → base64 + mimeType
+9. `analyzeFoodImage(base64, mimeType)` — Gemini multimodal (`gemini-2.5-flash`, temp 0.2, tokens 1024, `thinkingBudget:0`) ส่ง `inline_data` + prompt → return JSON
+10. ถ้า `is_food:false` → push ขอภาพใหม่
+11. ถ้าสำเร็จ → `formatFoodReply(analysis, profile)` + `pushMessage` + log `messages` (direction:`out`)
+12. error → push error message
 
 ---
 
